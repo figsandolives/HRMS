@@ -79,6 +79,7 @@ let fingerprintChannel = null;
 let firebaseDb = null;
 let firebaseSyncTimer = null;
 let firebaseListening = false;
+let firebaseHrListening = false;
 let employerMap = null;
 let employerMarker = null;
 let employerCircle = null;
@@ -89,6 +90,16 @@ function saveData(options={}){
   localStorage.setItem('hrmsData',JSON.stringify(appData));
   if(options.sync !== false) queueFolderSync();
   if(options.firebase !== false) queueFirebaseHrSync();
+}
+
+function collectionCount(value){
+  if(Array.isArray(value)) return value.length;
+  if(value && typeof value === 'object') return Object.keys(value).length;
+  return 0;
+}
+
+function hasMeaningfulHrData(data=appData){
+  return collectionCount(data.employees) > 0 || collectionCount(data.employers) > 0 || collectionCount(data.schedules) > 0;
 }
 
 function normalizeDigits(value){
@@ -135,8 +146,9 @@ function initFirebase(){
   try{
     const app = window.firebase.apps?.length ? window.firebase.app() : window.firebase.initializeApp(firebaseConfig);
     firebaseDb = app.database();
+    listenFirebaseHrData();
     listenFirebaseFingerprintPunches();
-    queueFirebaseHrSync();
+    if(hasMeaningfulHrData()) queueFirebaseHrSync();
   } catch(err){
     console.error(err);
   }
@@ -189,7 +201,7 @@ function queueFirebaseHrSync(){
 }
 
 async function syncHrDataToFirebase(){
-  if(!firebaseDb) return;
+  if(!firebaseDb || !hasMeaningfulHrData()) return;
   try{
     await firebaseDb.ref('hrData').update({
       employees:getFirebaseEmployeesPayload(),
@@ -201,6 +213,60 @@ async function syncHrDataToFirebase(){
   } catch(err){
     console.error(err);
   }
+}
+
+function normalizeImportedHrData(source){
+  const data = source?.data || source || {};
+  const normalized = {...data};
+  normalized.employees = Array.isArray(data.employees) ? data.employees : Object.values(data.employees || {});
+  normalized.employers = Array.isArray(data.employers) ? data.employers : Object.values(data.employers || {});
+  normalized.schedules = data.schedules || {};
+  normalized.settings = data.settings || {};
+  normalized.reminders = Array.isArray(data.reminders) ? data.reminders : Object.values(data.reminders || {});
+  normalized.fingerprintCodes = data.fingerprintCodes || {};
+  normalized.fingerprintPunches = Array.isArray(data.fingerprintPunches) ? data.fingerprintPunches : Object.entries(data.fingerprintPunches || {}).map(([id,punch])=>({id,...punch}));
+  return normalized;
+}
+
+function refreshAppAfterDataLoad(){
+  ensureAppDataShape();
+  localStorage.setItem('hrmsData',JSON.stringify(appData));
+  applyTheme(appData.settings?.theme || 'light');
+  renderFolderSettings();
+  renderEmployees();
+  renderEmployersList();
+  renderEmployersInForm();
+  renderReminders();
+  renderScheduleDays();
+  renderFingerprintReport();
+  updateReminderBadge();
+}
+
+function applyImportedHrData(source, origin='folder'){
+  const currentSettings = {...(appData.settings || {})};
+  const imported = normalizeImportedHrData(source);
+  appData = imported;
+  ensureAppDataShape();
+  appData.settings = {
+    ...(appData.settings || {}),
+    theme:currentSettings.theme || appData.settings.theme || 'light',
+    saveFolderName:currentSettings.saveFolderName || appData.settings.saveFolderName || '',
+    folderSelectedAt:currentSettings.folderSelectedAt || appData.settings.folderSelectedAt || ''
+  };
+  if(origin === 'firebase') appData.settings.firebaseLoadedAt = new Date().toISOString();
+  refreshAppAfterDataLoad();
+  queueFirebaseHrSync();
+}
+
+function listenFirebaseHrData(){
+  if(!firebaseDb || firebaseHrListening) return;
+  firebaseHrListening = true;
+  firebaseDb.ref('hrData').on('value', snap=>{
+    const remote = snap.val();
+    if(!remote || !hasMeaningfulHrData(remote) || hasMeaningfulHrData(appData)) return;
+    applyImportedHrData(remote,'firebase');
+    showToast('تم تحميل البيانات من Firebase');
+  }, err=>console.error(err));
 }
 
 function listenFirebaseFingerprintPunches(){
@@ -509,6 +575,27 @@ async function writeJsonFile(directoryHandle, fileName, data){
   await writeFile(directoryHandle, fileName, new Blob([prettyJson(data)], {type:'application/json;charset=utf-8'}));
 }
 
+async function getDirectoryIfExists(parentHandle, parts){
+  let dir = parentHandle;
+  for(const part of parts){
+    dir = await dir.getDirectoryHandle(safeFileName(part,'مجلد'), {create:false});
+  }
+  return dir;
+}
+
+async function readJsonFile(directoryHandle, fileName){
+  const fileHandle = await directoryHandle.getFileHandle(safeFileName(fileName,'ملف'), {create:false});
+  const file = await fileHandle.getFile();
+  const text = await file.text();
+  if(!text.trim()) return {};
+  return JSON.parse(text);
+}
+
+async function readJsonFileByPath(rootHandle, parts){
+  const dir = await getDirectoryIfExists(rootHandle, parts.slice(0,-1));
+  return readJsonFile(dir, parts[parts.length-1]);
+}
+
 async function writeDataUrlFile(directoryHandle, fileName, dataUrl){
   const blob = dataUrlToBlob(dataUrl);
   const safeName = await writeFile(directoryHandle, fileName, blob);
@@ -650,6 +737,13 @@ async function restoreSavedDirectoryHandle(){
     renderFolderSettings();
     const hasPermission = await ensureDirectoryPermission(handle,false);
     if(hasPermission){
+      if(!hasMeaningfulHrData()){
+        const imported = await tryImportDataFromFolder({silent:true, overwrite:false});
+        if(imported){
+          setFolderStatus(`تم تحميل بيانات المجلد تلقائياً: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
+          return;
+        }
+      }
       setFolderStatus(appData.settings.lastFileSyncAt ? `آخر مزامنة: ${new Date(appData.settings.lastFileSyncAt).toLocaleString('ar-KW')}` : 'المجلد جاهز للمزامنة.', 'success');
     } else {
       setFolderStatus('المجلد محفوظ، لكن يحتاج إعادة السماح من زر مزامنة الآن أو اختيار مجلد.', 'warn');
@@ -1251,11 +1345,73 @@ async function writeHrmsFilesToDirectory(rootHandle, syncedAt){
   };
 }
 
+async function tryImportDataFromFolder({silent=false, overwrite=true}={}){
+  if(!selectedSaveDirectoryHandle){
+    if(!silent){
+      setFolderStatus('اختر مجلد الحفظ أولاً ثم اضغط استيراد البيانات.', 'warn');
+      showToast('اختر مجلد الحفظ أولاً','error');
+    }
+    return false;
+  }
+  if(!silent) setFolderStatus('جاري استيراد البيانات من المجلد...', 'warn');
+  try{
+    const hasPermission = await ensureDirectoryPermission(selectedSaveDirectoryHandle,true);
+    if(!hasPermission){
+      if(!silent){
+        setFolderStatus('لا توجد صلاحية قراءة من المجلد.', 'error');
+        showToast('لم يتم منح صلاحية الوصول','error');
+      }
+      return false;
+    }
+    const exported = await readJsonFileByPath(selectedSaveDirectoryHandle,['قاعدة البيانات','قاعدة البيانات الكاملة.json']);
+    const importedData = exported?.data || exported;
+    if(!hasMeaningfulHrData(importedData)){
+      if(!silent){
+        setFolderStatus('المجلد لا يحتوي على بيانات سابقة. سيتم البدء كقاعدة جديدة.', 'success');
+        showToast('المجلد جديد وجاهز للحفظ');
+      }
+      return false;
+    }
+    if(!overwrite && hasMeaningfulHrData(appData)) return false;
+    applyImportedHrData(importedData,'folder');
+    appData.settings.saveFolderName = selectedSaveDirectoryHandle.name;
+    appData.settings.importedAt = new Date().toISOString();
+    localStorage.setItem('hrmsData',JSON.stringify(appData));
+    renderFolderSettings();
+    setFolderStatus(`تم استيراد البيانات: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
+    if(!silent) showToast('تم استيراد البيانات من المجلد');
+    return true;
+  } catch(err){
+    if(err?.name === 'NotFoundError'){
+      if(!silent) setFolderStatus('المجلد لا يحتوي على قاعدة بيانات سابقة. سيتم البدء كقاعدة جديدة.', 'success');
+      return false;
+    }
+    console.error(err);
+    if(!silent){
+      setFolderStatus('تعذر استيراد البيانات. تأكد أن المجلد يحتوي على قاعدة البيانات/قاعدة البيانات الكاملة.json', 'error');
+      showToast('فشل استيراد البيانات','error');
+    }
+    return false;
+  }
+}
+
+async function importDataFromFolder(){
+  await tryImportDataFromFolder({silent:false, overwrite:true});
+}
+
 async function syncDataToFolder(userTriggered=false){
   if(!selectedSaveDirectoryHandle){
     setFolderStatus('اختر مجلد الحفظ أولاً من زر اختيار مجلد.', 'warn');
     if(userTriggered) showToast('اختر مجلد الحفظ أولاً','error');
     return;
+  }
+  if(userTriggered && !hasMeaningfulHrData()){
+    const imported = await tryImportDataFromFolder({silent:true, overwrite:false});
+    if(imported){
+      setFolderStatus(`تم تحميل بيانات المجلد تلقائياً: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
+      showToast('تم تحميل البيانات من المجلد');
+      return;
+    }
   }
   if(folderSyncRunning){
     folderSyncPending = true;
@@ -2587,9 +2743,16 @@ async function chooseFolder(){
     appData.settings.saveFolderName = handle.name;
     delete appData.settings.savePath;
     appData.settings.folderSelectedAt = new Date().toISOString();
-    saveData({sync:false});
+    saveData({sync:false,firebase:false});
     renderFolderSettings();
-    await syncDataToFolder(true);
+    const imported = await tryImportDataFromFolder({silent:false, overwrite:true});
+    if(imported) return;
+    if(hasMeaningfulHrData()){
+      await syncDataToFolder(true);
+    } else {
+      setFolderStatus('المجلد جديد وجاهز. ابدأ بإضافة البيانات وسيتم حفظها تلقائياً.', 'success');
+      showToast('المجلد جاهز لبدء قاعدة جديدة');
+    }
   } catch(err){
     if(err?.name === 'AbortError') return;
     console.error(err);
