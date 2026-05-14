@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>تقرير البصمة</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232563eb'/%3E%3Cpath d='M18 30c0-7.7 6.3-14 14-14s14 6.3 14 14' fill='none' stroke='white' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M23 38c0-5 4-9 9-9s9 4 9 9' fill='none' stroke='white' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M32 41v8' stroke='white' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&family=Cairo:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f4f7fb;--panel:#fff;--panel2:#eef2f7;--panel3:#f8fafc;--text:#111827;--text2:#64748b;--text3:#94a3b8;
+  --heading:#0f172a;--accent:#2563eb;--green:#10b981;--red:#ef4444;--amber:#f59e0b;--border:rgba(15,23,42,.11);
+  --shadow:0 16px 40px rgba(15,23,42,.08);--radius:12px;
+}
+body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+.topbar{height:72px;background:var(--panel);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:10}
+.brand{display:flex;align-items:center;gap:12px}
+.brand-mark{width:42px;height:42px;border-radius:12px;background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:16px}
+.brand-title{font-size:22px;font-weight:900;color:var(--heading)}
+.brand-sub{font-size:12px;color:var(--text2);margin-top:2px}
+.top-actions{display:flex;gap:10px;align-items:center}
+.btn{height:40px;border:1px solid var(--border);border-radius:10px;padding:0 14px;font-family:'Tajawal',sans-serif;font-weight:800;background:var(--panel2);color:var(--heading);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.layout{max-width:1320px;margin:0 auto;padding:28px}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:18px;box-shadow:var(--shadow);padding:22px}
+.toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:18px}
+.title{font-size:24px;font-weight:900;color:var(--heading)}
+.subtitle{font-size:13px;color:var(--text2);margin-top:5px;min-height:20px}
+.controls{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.control{height:42px;border:1px solid var(--border);background:var(--panel2);border-radius:10px;padding:0 12px;font-family:'Tajawal',sans-serif;font-weight:800;color:var(--heading);min-width:150px;outline:none}
+.control:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.14)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+.stat{background:var(--panel3);border:1px solid var(--border);border-radius:12px;padding:14px}
+.stat-label{font-size:12px;color:var(--text2);font-weight:700}
+.stat-value{font-size:24px;color:var(--heading);font-weight:900;margin-top:4px}
+.status{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:7px 12px;font-size:12px;font-weight:900;background:rgba(245,158,11,.12);color:#92400e}
+.status.connected{background:rgba(16,185,129,.12);color:#047857}
+.status.error{background:rgba(239,68,68,.12);color:#b91c1c}
+.grid-wrap{background:var(--panel3);border:1px solid var(--border);border-radius:var(--radius);overflow:auto;box-shadow:var(--shadow)}
+.fingerprint-table{width:100%;border-collapse:separate;border-spacing:0;min-width:760px;font-family:'Cairo',sans-serif}
+.fingerprint-table th,.fingerprint-table td{border-left:1px solid var(--border);border-bottom:1px solid var(--border);padding:9px 10px;min-width:78px;height:42px;text-align:center;font-size:12px;white-space:nowrap}
+.fingerprint-table th{background:var(--panel2);color:var(--heading);font-weight:800;position:sticky;top:0;z-index:2}
+.fingerprint-table th:first-child,.fingerprint-table td:first-child{position:sticky;right:0;z-index:3;background:var(--panel3);min-width:190px;text-align:right;font-weight:800;color:var(--heading)}
+.fingerprint-table th:first-child{background:var(--panel2);z-index:4}
+.fingerprint-cell{position:relative;color:var(--text2)}
+.fingerprint-cell.bridge{box-shadow:inset 0 0 0 9999px var(--bridge-color)}
+.fingerprint-hit{display:inline-flex;align-items:center;justify-content:center;min-width:48px;padding:3px 8px;border-radius:999px;color:#fff;font-size:11px;font-weight:800;background:var(--hit-color)}
+.empty{padding:44px 16px;text-align:center;color:var(--text3);background:var(--panel3);border:1px solid var(--border);border-radius:var(--radius);font-weight:800}
+@media (max-width:760px){
+  .topbar{height:auto;align-items:flex-start;gap:14px;padding:16px;flex-direction:column}
+  .layout{padding:16px}
+  .toolbar{flex-direction:column}
+  .controls{justify-content:stretch;width:100%}
+  .control,.btn{width:100%}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">HR</div>
+    <div>
+      <div class="brand-title">تقرير البصمة</div>
+      <div class="brand-sub">قراءة مباشرة من Firebase</div>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span class="status" id="connectionStatus">جاري الاتصال</span>
+    <a class="btn" href="index.html">الرجوع للنظام</a>
+    <a class="btn btn-primary" href="تطبيق البصمة/index.html">تطبيق البصمة</a>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="panel">
+    <div class="toolbar">
+      <div>
+        <div class="title">سجل البصمات</div>
+        <div class="subtitle" id="reportSubtitle"></div>
+      </div>
+      <div class="controls">
+        <select class="control" id="reportMode" onchange="renderReport()">
+          <option value="day">كل الموظفين</option>
+          <option value="employee">موظف محدد</option>
+        </select>
+        <input class="control" type="date" id="dayDate" onchange="renderReport()">
+        <select class="control" id="employeeSelect" onchange="renderReport()" style="display:none"></select>
+        <input class="control" type="date" id="fromDate" onchange="renderReport()" style="display:none">
+        <input class="control" type="date" id="toDate" onchange="renderReport()" style="display:none">
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="stat-label">الموظفون</div><div class="stat-value" id="employeesCount">0</div></div>
+      <div class="stat"><div class="stat-label">بصمات اليوم</div><div class="stat-value" id="todayPunchesCount">0</div></div>
+      <div class="stat"><div class="stat-label">أول بصمة</div><div class="stat-value" id="firstPunch">-</div></div>
+      <div class="stat"><div class="stat-label">آخر بصمة</div><div class="stat-value" id="lastPunch">-</div></div>
+    </div>
+
+    <div id="reportView" class="empty">جاري تحميل بيانات البصمة...</div>
+  </section>
+</main>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyC5aYsmT1qUJd5D8GVh5WlIlLeiT35t8WQ",
+  authDomain: "hrpro-f80e7.firebaseapp.com",
+  databaseURL: "https://hrpro-f80e7-default-rtdb.firebaseio.com",
+  projectId: "hrpro-f80e7",
+  storageBucket: "hrpro-f80e7.firebasestorage.app",
+  messagingSenderId: "999134303706",
+  appId: "1:999134303706:web:a9f0b7bacb6ba796f55ce3",
+  measurementId: "G-JFC4SPKXDK"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const colors = ['#2563eb','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#14b8a6','#f97316'];
+const state = {employees:[], punches:[], hrLoaded:false, punchesLoaded:false};
+
+function setConnectionStatus(text,type=''){
+  const el = document.getElementById('connectionStatus');
+  el.textContent = text;
+  el.className = `status ${type}`.trim();
+}
+
+function escapeHtml(value){
+  return String(value ?? '').replace(/[&<>"']/g, ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch]));
+}
+
+function formatDateInput(date=new Date()){
+  const d = new Date(date);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function parseDateInput(value){
+  if(!value) return new Date();
+  const [y,m,d] = String(value).split('-').map(Number);
+  return new Date(y,m-1,d);
+}
+
+function timeToMin(time){
+  const [h,m] = String(time || '00:00').split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+function formatTimeValue(time){
+  if(!time) return '';
+  const [hourPart, minutePart='0'] = String(time).split(':');
+  const hour = parseInt(hourPart,10);
+  const minute = parseInt(minutePart,10);
+  if(Number.isNaN(hour) || Number.isNaN(minute)) return time;
+  const suffix = hour < 12 ? 'ص' : 'م';
+  const displayHour = hour % 12 || 12;
+  return minute ? `${displayHour}:${String(minute).padStart(2,'0')}${suffix}` : `${displayHour}${suffix}`;
+}
+
+function getArabicDayName(date){
+  return ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'][date.getDay()];
+}
+
+function hexToRgba(hex, alpha){
+  const value = String(hex || '#2563eb').replace('#','');
+  const full = value.length === 3 ? value.split('').map(ch=>ch+ch).join('') : value;
+  const int = parseInt(full,16);
+  const r = (int >> 16) & 255;
+  const g = (int >> 8) & 255;
+  const b = int & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function colorForKey(key){
+  const text = String(key || '');
+  let hash = 0;
+  for(let i=0;i<text.length;i++) hash = ((hash << 5) - hash) + text.charCodeAt(i);
+  return colors[Math.abs(hash) % colors.length];
+}
+
+function normalizeEmployees(value){
+  const list = Array.isArray(value) ? value : Object.values(value || {});
+  return list
+    .filter(emp=>emp && emp.id)
+    .map(emp=>({id:emp.id, name:emp.name || emp.empName || 'موظف', position:emp.position || '', employer:emp.employer || ''}))
+    .sort((a,b)=>String(a.name).localeCompare(String(b.name),'ar'));
+}
+
+function normalizePunches(value){
+  return Object.entries(value || {}).map(([id,punch])=>({
+    id,
+    ...punch
+  })).sort((a,b)=>String(a.iso || '').localeCompare(String(b.iso || '')));
+}
+
+function getEmployeesForReport(){
+  if(state.employees.length) return state.employees;
+  const byId = {};
+  state.punches.forEach(punch=>{
+    if(!punch.empId) return;
+    byId[punch.empId] = {id:punch.empId, name:punch.empName || punch.empId};
+  });
+  return Object.values(byId).sort((a,b)=>String(a.name).localeCompare(String(b.name),'ar'));
+}
+
+function getPunchDate(punch){
+  if(punch.date) return punch.date;
+  return punch.iso ? formatDateInput(new Date(punch.iso)) : '';
+}
+
+function getPunchTime(punch){
+  if(punch.time) return punch.time;
+  if(!punch.iso) return '';
+  const d = new Date(punch.iso);
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
+function punchTimeToMinutes(punch){
+  return timeToMin(getPunchTime(punch));
+}
+
+function getPunchesForDate(dateValue, empId=''){
+  return state.punches
+    .filter(punch=>getPunchDate(punch) === dateValue && (!empId || punch.empId === empId))
+    .sort((a,b)=>punchTimeToMinutes(a)-punchTimeToMinutes(b));
+}
+
+function getDateRangeValues(fromValue,toValue){
+  let start = parseDateInput(fromValue);
+  let end = parseDateInput(toValue);
+  start.setHours(0,0,0,0);
+  end.setHours(0,0,0,0);
+  if(start > end) [start,end] = [end,start];
+  const values = [];
+  for(const d = new Date(start); d <= end; d.setDate(d.getDate()+1)){
+    values.push(formatDateInput(d));
+  }
+  return values;
+}
+
+function getTimeColumns(punches){
+  return [...new Set(punches.map(getPunchTime).filter(Boolean))]
+    .sort((a,b)=>timeToMin(a)-timeToMin(b));
+}
+
+function buildFingerprintTable(rows, columns){
+  if(!columns.length) return '<div class="empty">لا توجد بصمات في الفترة المحددة</div>';
+  const head = columns.map(time=>`<th>${formatTimeValue(time)}</th>`).join('');
+  const body = rows.map(row=>{
+    const color = row.color || colorForKey(row.key);
+    const sortedPunches = [...row.punches].sort((a,b)=>punchTimeToMinutes(a)-punchTimeToMinutes(b));
+    const hitsByTime = new Map();
+    sortedPunches.forEach(punch=>{
+      const time = getPunchTime(punch);
+      if(!hitsByTime.has(time)) hitsByTime.set(time,[]);
+      hitsByTime.get(time).push(punch);
+    });
+    const ranges = [];
+    for(let i=0;i<sortedPunches.length;i+=2){
+      const start = columns.indexOf(getPunchTime(sortedPunches[i]));
+      const endPunch = sortedPunches[i+1] || sortedPunches[i];
+      const end = columns.indexOf(getPunchTime(endPunch));
+      if(start >= 0 && end >= 0) ranges.push([Math.min(start,end),Math.max(start,end)]);
+    }
+    const cells = columns.map((time,idx)=>{
+      const hits = hitsByTime.get(time) || [];
+      const isBridge = ranges.some(([start,end])=>idx >= start && idx <= end);
+      const style = `--bridge-color:${hexToRgba(color,.16)};--hit-color:${color}`;
+      const content = hits.map(punch=>`<span class="fingerprint-hit" style="${style}">${formatTimeValue(getPunchTime(punch))}</span>`).join(' ');
+      return `<td class="fingerprint-cell ${isBridge?'bridge':''}" style="${style}">${content}</td>`;
+    }).join('');
+    return `<tr><td>${escapeHtml(row.label)}</td>${cells}</tr>`;
+  }).join('');
+  return `<div class="grid-wrap"><table class="fingerprint-table"><thead><tr><th></th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function ensureControls(){
+  const today = formatDateInput(new Date());
+  const dayInput = document.getElementById('dayDate');
+  const fromInput = document.getElementById('fromDate');
+  const toInput = document.getElementById('toDate');
+  if(dayInput && !dayInput.value) dayInput.value = today;
+  if(fromInput && !fromInput.value) fromInput.value = today.slice(0,8)+'01';
+  if(toInput && !toInput.value) toInput.value = today;
+  const employeeSelect = document.getElementById('employeeSelect');
+  if(employeeSelect){
+    const employees = getEmployeesForReport();
+    const current = employeeSelect.value;
+    employeeSelect.innerHTML = employees.map(emp=>`<option value="${escapeHtml(emp.id)}">${escapeHtml(emp.name)}</option>`).join('');
+    if(current && employees.some(emp=>emp.id === current)) employeeSelect.value = current;
+  }
+}
+
+function updateStats(){
+  const today = formatDateInput(new Date());
+  const todayPunches = getPunchesForDate(today);
+  document.getElementById('employeesCount').textContent = getEmployeesForReport().length;
+  document.getElementById('todayPunchesCount').textContent = todayPunches.length;
+  document.getElementById('firstPunch').textContent = todayPunches[0] ? formatTimeValue(getPunchTime(todayPunches[0])) : '-';
+  document.getElementById('lastPunch').textContent = todayPunches.at(-1) ? formatTimeValue(getPunchTime(todayPunches.at(-1))) : '-';
+}
+
+function renderReport(){
+  const view = document.getElementById('reportView');
+  const subtitle = document.getElementById('reportSubtitle');
+  ensureControls();
+  updateStats();
+  if(!state.hrLoaded || !state.punchesLoaded){
+    view.innerHTML = '<div class="empty">جاري تحميل بيانات البصمة...</div>';
+    return;
+  }
+  const mode = document.getElementById('reportMode').value;
+  const dayInput = document.getElementById('dayDate');
+  const employeeSelect = document.getElementById('employeeSelect');
+  const fromInput = document.getElementById('fromDate');
+  const toInput = document.getElementById('toDate');
+  const isEmployeeMode = mode === 'employee';
+  dayInput.style.display = isEmployeeMode ? 'none' : '';
+  employeeSelect.style.display = isEmployeeMode ? '' : 'none';
+  fromInput.style.display = isEmployeeMode ? '' : 'none';
+  toInput.style.display = isEmployeeMode ? '' : 'none';
+
+  const employees = getEmployeesForReport();
+  if(!employees.length){
+    subtitle.textContent = 'لا توجد بيانات موظفين منشورة بعد. اعتمد جدول توزيع من النظام أولاً.';
+    view.innerHTML = '<div class="empty">لا توجد بيانات موظفين في Firebase</div>';
+    return;
+  }
+
+  if(isEmployeeMode){
+    const empId = employeeSelect.value || employees[0]?.id || '';
+    const emp = employees.find(item=>item.id === empId);
+    const fromValue = fromInput.value || formatDateInput(new Date());
+    const toValue = toInput.value || fromValue;
+    const dates = getDateRangeValues(fromValue,toValue);
+    const allPunches = dates.flatMap(date=>getPunchesForDate(date,empId));
+    const columns = getTimeColumns(allPunches);
+    const rows = dates.map(dateValue=>{
+      const date = parseDateInput(dateValue);
+      return {
+        key:dateValue,
+        label:`${getArabicDayName(date)} ${date.toLocaleDateString('ar-KW')}`,
+        color:colorForKey(empId || dateValue),
+        punches:getPunchesForDate(dateValue,empId)
+      };
+    });
+    subtitle.textContent = emp ? `${emp.name} من ${parseDateInput(fromValue).toLocaleDateString('ar-KW')} إلى ${parseDateInput(toValue).toLocaleDateString('ar-KW')}` : '';
+    view.innerHTML = buildFingerprintTable(rows,columns);
+    return;
+  }
+
+  const dateValue = dayInput.value || formatDateInput(new Date());
+  const reportDate = parseDateInput(dateValue);
+  const punches = getPunchesForDate(dateValue);
+  const columns = getTimeColumns(punches);
+  const rows = employees.map(emp=>({
+    key:emp.id,
+    label:emp.name,
+    color:colorForKey(emp.id),
+    punches:getPunchesForDate(dateValue,emp.id)
+  }));
+  subtitle.textContent = `${getArabicDayName(reportDate)} ${reportDate.toLocaleDateString('ar-KW')}`;
+  view.innerHTML = buildFingerprintTable(rows,columns);
+}
+
+function startFirebaseListeners(){
+  db.ref('.info/connected').on('value', snap=>{
+    setConnectionStatus(snap.val() ? 'متصل' : 'غير متصل', snap.val() ? 'connected' : 'error');
+  });
+  db.ref('hrData').on('value', snap=>{
+    const value = snap.val() || {};
+    state.employees = normalizeEmployees(value.employees);
+    state.hrLoaded = true;
+    renderReport();
+  }, err=>{
+    console.error(err);
+    setConnectionStatus('خطأ في قراءة بيانات الموظفين','error');
+  });
+  db.ref('fingerprintPunches').on('value', snap=>{
+    state.punches = normalizePunches(snap.val());
+    state.punchesLoaded = true;
+    renderReport();
+  }, err=>{
+    console.error(err);
+    setConnectionStatus('خطأ في قراءة البصمات','error');
+  });
+}
+
+document.addEventListener('DOMContentLoaded', ()=>{
+  ensureControls();
+  startFirebaseListeners();
+});
+</script>
+</body>
+</html>

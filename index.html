@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>نظام إدارة الموارد البشرية</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232563eb'/%3E%3Ctext x='32' y='41' text-anchor='middle' font-size='24' font-family='Arial' font-weight='700' fill='white'%3EHR%3C/text%3E%3C/svg%3E">
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800&family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="styles.css">
@@ -64,9 +65,13 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         جدول الدوامات
       </div>
-      <div class="nav-item" data-page="fingerprint" onclick="navTo('fingerprint',this)">
+      <div class="nav-item" onclick="openFingerprintReport()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1C6.48 1 2 5.48 2 11v2c0 1.1.9 2 2 2h1v-4c0-3.87 3.13-7 7-7s7 3.13 7 7v4h1c1.1 0 2-.9 2-2v-2c0-5.52-4.48-10-10-10z"/><path d="M9 17h6M12 17v4"/></svg>
         تقرير البصمة
+      </div>
+      <div class="nav-item" onclick="openFingerprintApp()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/><path d="M9 7c0-1.66 1.34-3 3-3s3 1.34 3 3v1"/><path d="M8 11c0-2.21 1.79-4 4-4s4 1.79 4 4v1"/><path d="M10 14c0-1.1.9-2 2-2s2 .9 2 2"/></svg>
+        تطبيق البصمة
       </div>
       <div class="nav-item" data-page="reminders" onclick="navTo('reminders',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
@@ -390,7 +395,10 @@
                 <div class="setting-label">رموز دخول البصمة</div>
                 <div class="setting-sub">تحديد رمز خاص لكل موظف لاستخدام تطبيق البصمة</div>
               </div>
-              <button class="btn btn-primary" onclick="navTo('fingerprintCodes')">تحديد رموز الدخول للبصمة</button>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end">
+                <button class="btn btn-primary" onclick="navTo('fingerprintCodes')">تحديد رموز الدخول للبصمة</button>
+                <button class="btn btn-secondary" onclick="openFingerprintApp()">فتح تطبيق البصمة</button>
+              </div>
             </div>
           </div>
           <div class="section-title">المظهر</div>
@@ -418,27 +426,6 @@
 
       <!-- OTHER PAGES -->
       <div class="page" id="page-notifications"><div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><p>لا توجد إشعارات حالياً</p></div></div>
-      <div class="page" id="page-fingerprint">
-        <div class="fingerprint-report">
-          <div class="fingerprint-toolbar">
-            <div>
-              <div class="section-title" style="margin-bottom:6px">تقرير البصمة</div>
-              <div class="setting-sub" id="fingerprintReportSubtitle"></div>
-            </div>
-            <div class="fingerprint-controls">
-              <select class="form-control" id="fingerprintReportMode" onchange="renderFingerprintReport()">
-                <option value="day">كل الموظفين</option>
-                <option value="employee">موظف محدد</option>
-              </select>
-              <input class="form-control" type="date" id="fingerprintDayDate" onchange="renderFingerprintReport()">
-              <select class="form-control" id="fingerprintEmployeeSelect" onchange="renderFingerprintReport()" style="display:none"></select>
-              <input class="form-control" type="date" id="fingerprintFromDate" onchange="renderFingerprintReport()" style="display:none">
-              <input class="form-control" type="date" id="fingerprintToDate" onchange="renderFingerprintReport()" style="display:none">
-            </div>
-          </div>
-          <div id="fingerprintReportView"></div>
-        </div>
-      </div>
       <div class="page" id="page-fingerprintCodes">
         <div style="max-width:760px">
           <div class="section-title">رموز دخول البصمة</div>
@@ -614,8 +601,6 @@
   <span id="toastMsg">تم بنجاح</span>
 </div>
 
-<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="script.js"></script>
 </body>

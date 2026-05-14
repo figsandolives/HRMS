@@ -75,11 +75,7 @@ let selectedSaveDirectoryHandle = null;
 let folderSyncTimer = null;
 let folderSyncRunning = false;
 let folderSyncPending = false;
-let fingerprintChannel = null;
-let firebaseDb = null;
-let firebaseSyncTimer = null;
-let firebaseListening = false;
-let firebaseHrListening = false;
+let firebasePublisherScriptPromise = null;
 let employerMap = null;
 let employerMarker = null;
 let employerCircle = null;
@@ -89,7 +85,6 @@ function saveData(options={}){
   ensureAppDataShape();
   localStorage.setItem('hrmsData',JSON.stringify(appData));
   if(options.sync !== false) queueFolderSync();
-  if(options.firebase !== false) queueFirebaseHrSync();
 }
 
 function collectionCount(value){
@@ -124,8 +119,7 @@ function resetToFreshFolderDatabase(folderName){
     theme:currentSettings.theme || 'light',
     saveFolderName:folderName || currentSettings.saveFolderName || '',
     folderSelectedAt:selectedAt,
-    freshFolderStartedAt:selectedAt,
-    skipFirebaseHrImport:true
+    freshFolderStartedAt:selectedAt
   });
   editingEmpId = null;
   currentProfileId = null;
@@ -164,28 +158,12 @@ function parseDateInput(value){
   return new Date(y,m-1,d);
 }
 
-const firebaseConfig = {
-  apiKey: "AIzaSyC5aYsmT1qUJd5D8GVh5WlIlLeiT35t8WQ",
-  authDomain: "hrpro-f80e7.firebaseapp.com",
-  databaseURL: "https://hrpro-f80e7-default-rtdb.firebaseio.com",
-  projectId: "hrpro-f80e7",
-  storageBucket: "hrpro-f80e7.firebasestorage.app",
-  messagingSenderId: "999134303706",
-  appId: "1:999134303706:web:a9f0b7bacb6ba796f55ce3",
-  measurementId: "G-JFC4SPKXDK"
-};
+function openFingerprintApp(){
+  window.location.href = encodeURI('تطبيق البصمة/index.html');
+}
 
-function initFirebase(){
-  if(firebaseDb || !window.firebase?.database) return;
-  try{
-    const app = window.firebase.apps?.length ? window.firebase.app() : window.firebase.initializeApp(firebaseConfig);
-    firebaseDb = app.database();
-    listenFirebaseHrData();
-    listenFirebaseFingerprintPunches();
-    if(hasMeaningfulHrData()) queueFirebaseHrSync();
-  } catch(err){
-    console.error(err);
-  }
+function openFingerprintReport(){
+  window.location.href = 'basma.html';
 }
 
 function getFirebaseEmployeesPayload(){
@@ -228,25 +206,49 @@ function getFirebaseEmployersPayload(){
   return payload;
 }
 
-function queueFirebaseHrSync(){
-  if(!firebaseDb) return;
-  clearTimeout(firebaseSyncTimer);
-  firebaseSyncTimer = setTimeout(syncHrDataToFirebase,700);
+function loadExternalScript(src){
+  return new Promise((resolve,reject)=>{
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if(existing){
+      existing.addEventListener('load', resolve, {once:true});
+      existing.addEventListener('error', reject, {once:true});
+      if(existing.dataset.loaded === 'true') resolve();
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.onload = ()=>{
+      script.dataset.loaded = 'true';
+      resolve();
+    };
+    script.onerror = ()=>reject(new Error(`تعذر تحميل ${src}`));
+    document.head.appendChild(script);
+  });
 }
 
-async function syncHrDataToFirebase(){
-  if(!firebaseDb || !hasMeaningfulHrData()) return;
-  try{
-    await firebaseDb.ref('hrData').update({
-      employees:getFirebaseEmployeesPayload(),
-      employers:getFirebaseEmployersPayload(),
-      fingerprintCodes:appData.fingerprintCodes || {},
-      schedules:appData.schedules || {},
-      updatedAt:new Date().toISOString()
-    });
-  } catch(err){
-    console.error(err);
+async function loadFirebasePublisher(){
+  if(window.publishHrmsApprovedSchedule) return;
+  if(!firebasePublisherScriptPromise){
+    firebasePublisherScriptPromise = loadExternalScript('firebase-publisher.js');
   }
+  await firebasePublisherScriptPromise;
+}
+
+function cloneForFirebase(data){
+  return JSON.parse(JSON.stringify(data ?? null));
+}
+
+async function publishApprovedScheduleToFirebase(dayKey, schedule){
+  await loadFirebasePublisher();
+  if(!window.publishHrmsApprovedSchedule) throw new Error('ناشر Firebase غير جاهز');
+  return window.publishHrmsApprovedSchedule({
+    dayKey,
+    schedule:cloneForFirebase(schedule),
+    employees:getFirebaseEmployeesPayload(),
+    employers:getFirebaseEmployersPayload(),
+    fingerprintCodes:appData.fingerprintCodes || {}
+  });
 }
 
 function normalizeImportedHrData(source){
@@ -272,7 +274,6 @@ function refreshAppAfterDataLoad(){
   renderEmployersInForm();
   renderReminders();
   renderScheduleDays();
-  renderFingerprintReport();
   updateReminderBadge();
 }
 
@@ -287,36 +288,8 @@ function applyImportedHrData(source, origin='folder'){
     saveFolderName:currentSettings.saveFolderName || appData.settings.saveFolderName || '',
     folderSelectedAt:currentSettings.folderSelectedAt || appData.settings.folderSelectedAt || ''
   };
-  delete appData.settings.skipFirebaseHrImport;
   if(origin === 'firebase') appData.settings.firebaseLoadedAt = new Date().toISOString();
   refreshAppAfterDataLoad();
-  queueFirebaseHrSync();
-}
-
-function listenFirebaseHrData(){
-  if(!firebaseDb || firebaseHrListening) return;
-  firebaseHrListening = true;
-  firebaseDb.ref('hrData').on('value', snap=>{
-    const remote = snap.val();
-    if(!remote || !hasMeaningfulHrData(remote) || hasMeaningfulHrData(appData)) return;
-    if(appData.settings?.skipFirebaseHrImport || appData.settings?.saveFolderName) return;
-    applyImportedHrData(remote,'firebase');
-    showToast('تم تحميل البيانات من Firebase');
-  }, err=>console.error(err));
-}
-
-function listenFirebaseFingerprintPunches(){
-  if(!firebaseDb || firebaseListening) return;
-  firebaseListening = true;
-  firebaseDb.ref('fingerprintPunches').on('value', snap=>{
-    const value = snap.val() || {};
-    appData.fingerprintPunches = Object.entries(value).map(([id,punch])=>({
-      id,
-      ...punch
-    })).sort((a,b)=>String(a.iso || '').localeCompare(String(b.iso || '')));
-    localStorage.setItem('hrmsData',JSON.stringify(appData));
-    if(currentPage === 'fingerprint') renderFingerprintReport();
-  }, err=>console.error(err));
 }
 
 function formatTimeValue(time){
@@ -1833,7 +1806,6 @@ function logout(){
 
 // ===== INIT =====
 function initApp(){
-  initFirebase();
   populateNationalitySelect();
   populateIntlCountries();
   renderEmployees();
@@ -1841,7 +1813,6 @@ function initApp(){
   renderEmployersInForm();
   renderReminders();
   renderScheduleDays();
-  renderFingerprintReport();
   updateReminderBadge();
 }
 
@@ -1921,7 +1892,6 @@ function navTo(page, el){
     if(!editingEmpId) resetAddForm();
   }
   if(page==='settings') updateThemeToggle();
-  if(page==='fingerprint') renderFingerprintReport();
   if(page==='fingerprintCodes') renderFingerprintCodes();
   if(page==='employers') renderEmployersList();
   if(page==='reminders') renderReminders();
@@ -2573,156 +2543,6 @@ function saveFingerprintCodes(){
   showToast('تم حفظ رموز دخول البصمة');
 }
 
-function getArabicDayName(date){
-  return ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'][date.getDay()];
-}
-
-function getPunchDate(punch){
-  if(punch.date) return punch.date;
-  return punch.iso ? formatDateInput(new Date(punch.iso)) : '';
-}
-
-function getPunchTime(punch){
-  if(punch.time) return punch.time;
-  if(!punch.iso) return '';
-  const d = new Date(punch.iso);
-  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-}
-
-function punchTimeToMinutes(punch){
-  const time = getPunchTime(punch);
-  if(!time) return 0;
-  return timeToMin(time);
-}
-
-function getFingerprintPunchesForDate(dateValue, empId=''){
-  return (appData.fingerprintPunches || [])
-    .filter(punch=>getPunchDate(punch) === dateValue && (!empId || punch.empId === empId))
-    .sort((a,b)=>punchTimeToMinutes(a)-punchTimeToMinutes(b));
-}
-
-function getDateRangeValues(fromValue, toValue){
-  const start = parseDateInput(fromValue);
-  const end = parseDateInput(toValue);
-  start.setHours(0,0,0,0);
-  end.setHours(0,0,0,0);
-  const values = [];
-  for(const d = new Date(start); d <= end; d.setDate(d.getDate()+1)){
-    values.push(formatDateInput(d));
-  }
-  return values;
-}
-
-function getFingerprintTimeColumns(punches){
-  return [...new Set(punches.map(getPunchTime).filter(Boolean))]
-    .sort((a,b)=>timeToMin(a)-timeToMin(b));
-}
-
-function formatTimeColumn(time){
-  return formatTimeValue(time);
-}
-
-function buildFingerprintTable(rows, columns){
-  if(!columns.length){
-    return '<div class="fingerprint-empty">لا توجد بصمات في الفترة المحددة</div>';
-  }
-  const head = columns.map(time=>`<th>${formatTimeColumn(time)}</th>`).join('');
-  const body = rows.map(row=>{
-    const color = row.color || getScheduleEmployeeColor(row.key);
-    const sortedPunches = [...row.punches].sort((a,b)=>punchTimeToMinutes(a)-punchTimeToMinutes(b));
-    const hitsByTime = new Map();
-    sortedPunches.forEach(punch=>{
-      const time = getPunchTime(punch);
-      if(!hitsByTime.has(time)) hitsByTime.set(time,[]);
-      hitsByTime.get(time).push(punch);
-    });
-    const ranges = [];
-    for(let i=0;i<sortedPunches.length;i+=2){
-      const start = columns.indexOf(getPunchTime(sortedPunches[i]));
-      const endPunch = sortedPunches[i+1] || sortedPunches[i];
-      const end = columns.indexOf(getPunchTime(endPunch));
-      if(start >= 0 && end >= 0) ranges.push([Math.min(start,end),Math.max(start,end)]);
-    }
-    const cells = columns.map((time,idx)=>{
-      const hits = hitsByTime.get(time) || [];
-      const isBridge = ranges.some(([start,end])=>idx >= start && idx <= end);
-      const style = `--bridge-color:${hexToRgba(color,.15)};--hit-color:${color}`;
-      const content = hits.map(punch=>`<span class="fingerprint-hit" style="${style}">${formatTimeValue(getPunchTime(punch))}</span>`).join(' ');
-      return `<td class="fingerprint-cell ${isBridge?'bridge':''}" style="${style}">${content}</td>`;
-    }).join('');
-    return `<tr><td>${escapeHtml(row.label)}</td>${cells}</tr>`;
-  }).join('');
-  return `<div class="fingerprint-grid-wrap"><table class="fingerprint-table"><thead><tr><th></th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
-}
-
-function ensureFingerprintControls(){
-  const today = formatDateInput(new Date());
-  const dayInput = document.getElementById('fingerprintDayDate');
-  const fromInput = document.getElementById('fingerprintFromDate');
-  const toInput = document.getElementById('fingerprintToDate');
-  if(dayInput && !dayInput.value) dayInput.value = today;
-  if(fromInput && !fromInput.value) fromInput.value = today.slice(0,8)+'01';
-  if(toInput && !toInput.value) toInput.value = today;
-  const employeeSelect = document.getElementById('fingerprintEmployeeSelect');
-  if(employeeSelect){
-    const current = employeeSelect.value;
-    employeeSelect.innerHTML = appData.employees.map(emp=>`<option value="${emp.id}">${escapeHtml(emp.name)}</option>`).join('');
-    if(current) employeeSelect.value = current;
-  }
-}
-
-function renderFingerprintReport(){
-  const view = document.getElementById('fingerprintReportView');
-  if(!view) return;
-  ensureFingerprintControls();
-  const mode = document.getElementById('fingerprintReportMode')?.value || 'day';
-  const dayInput = document.getElementById('fingerprintDayDate');
-  const employeeSelect = document.getElementById('fingerprintEmployeeSelect');
-  const fromInput = document.getElementById('fingerprintFromDate');
-  const toInput = document.getElementById('fingerprintToDate');
-  const subtitle = document.getElementById('fingerprintReportSubtitle');
-  const isEmployeeMode = mode === 'employee';
-  if(dayInput) dayInput.style.display = isEmployeeMode ? 'none' : '';
-  if(employeeSelect) employeeSelect.style.display = isEmployeeMode ? '' : 'none';
-  if(fromInput) fromInput.style.display = isEmployeeMode ? '' : 'none';
-  if(toInput) toInput.style.display = isEmployeeMode ? '' : 'none';
-
-  if(isEmployeeMode){
-    const empId = employeeSelect?.value || appData.employees[0]?.id || '';
-    const emp = appData.employees.find(e=>e.id===empId);
-    const fromValue = fromInput?.value || formatDateInput(new Date());
-    const toValue = toInput?.value || fromValue;
-    const dates = getDateRangeValues(fromValue,toValue);
-    const allPunches = dates.flatMap(date=>getFingerprintPunchesForDate(date,empId));
-    const columns = getFingerprintTimeColumns(allPunches);
-    const rows = dates.map(dateValue=>{
-      const date = parseDateInput(dateValue);
-      return {
-        key:dateValue,
-        label:`${getArabicDayName(date)} ${date.toLocaleDateString('ar-KW')}`,
-        color:getScheduleEmployeeColor(empId || dateValue),
-        punches:getFingerprintPunchesForDate(dateValue,empId)
-      };
-    });
-    if(subtitle) subtitle.textContent = emp ? `${emp.name} من ${parseDateInput(fromValue).toLocaleDateString('ar-KW')} إلى ${parseDateInput(toValue).toLocaleDateString('ar-KW')}` : '';
-    view.innerHTML = buildFingerprintTable(rows,columns);
-    return;
-  }
-
-  const dateValue = dayInput?.value || formatDateInput(new Date());
-  const reportDate = parseDateInput(dateValue);
-  const punches = getFingerprintPunchesForDate(dateValue);
-  const columns = getFingerprintTimeColumns(punches);
-  const rows = appData.employees.map(emp=>({
-    key:emp.id,
-    label:emp.name,
-    color:getScheduleEmployeeColor(emp.id),
-    punches:getFingerprintPunchesForDate(dateValue,emp.id)
-  }));
-  if(subtitle) subtitle.textContent = `${getArabicDayName(reportDate)} ${reportDate.toLocaleDateString('ar-KW')}`;
-  view.innerHTML = buildFingerprintTable(rows,columns);
-}
-
 // ===== SCHEDULE =====
 const days = ['السبت','الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة'];
 const dayKeys = ['sat','sun','mon','tue','wed','thu','fri'];
@@ -3001,6 +2821,15 @@ async function approveScheduleDay(){
   document.getElementById('scheduleUnsavedWarning').style.display='none';
   updateScheduleButtons();
   renderScheduleDays();
+  let firebasePublished = false;
+  try{
+    setFolderStatus('جاري نشر الدوام المعتمد لتطبيق البصمة...', 'warn');
+    await publishApprovedScheduleToFirebase(selectedDay,scheduleState);
+    firebasePublished = true;
+  } catch(err){
+    console.error(err);
+    showToast('تم الاعتماد، لكن تعذر نشر الدوام لتطبيق البصمة','error');
+  }
   if(selectedSaveDirectoryHandle){
     try{
       setFolderStatus('جاري حفظ PDF جدول الدوام...', 'warn');
@@ -3013,20 +2842,20 @@ async function approveScheduleDay(){
         appData.schedules[selectedDay] = JSON.parse(JSON.stringify(scheduleState));
         localStorage.setItem('hrmsData',JSON.stringify(appData));
         await syncDataToFolder(false);
-        showToast('تم اعتماد التوزيع وحفظ نسختين PDF ✓');
+        showToast(firebasePublished ? 'تم اعتماد التوزيع وحفظ PDF ونشره لتطبيق البصمة ✓' : 'تم اعتماد التوزيع وحفظ PDF، لكن تعذر نشره لتطبيق البصمة', firebasePublished ? 'success' : 'error');
       } else {
         saveData();
-        showToast('تم الاعتماد، لكن لم يتم حفظ PDF لعدم وجود صلاحية','error');
+        showToast(firebasePublished ? 'تم الاعتماد ونشره لتطبيق البصمة، لكن لم يتم حفظ PDF لعدم وجود صلاحية' : 'تم الاعتماد، لكن لم يتم حفظ PDF أو نشره','error');
       }
     } catch(err){
       console.error(err);
       saveData();
       setFolderStatus('تم الاعتماد، لكن تعذر حفظ ملف PDF.', 'error');
-      showToast('تم الاعتماد، لكن فشل حفظ PDF','error');
+      showToast(firebasePublished ? 'تم الاعتماد ونشره لتطبيق البصمة، لكن فشل حفظ PDF' : 'تم الاعتماد، لكن فشل حفظ PDF ونشر الدوام','error');
     }
   } else {
     saveData();
-    showToast('تم الاعتماد. اختر مجلد الحفظ من الإعدادات ليتم إنشاء PDF','error');
+    showToast(firebasePublished ? 'تم الاعتماد ونشره لتطبيق البصمة. اختر مجلد الحفظ لإنشاء PDF' : 'تم الاعتماد، لكن اختر مجلد الحفظ ولم يتم نشر الدوام','error');
   }
 }
 
