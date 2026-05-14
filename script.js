@@ -491,10 +491,34 @@ function prettyJson(data){
   return JSON.stringify(data,null,2);
 }
 
+function isDataUrl(value){
+  return /^data:[^,]+,/.test(String(value || '').trim());
+}
+
+function isImageDataUrl(value){
+  return /^data:image\//.test(String(value || '').trim());
+}
+
+function isExternalFileMarker(value){
+  return /^\[محفوظ كملف مستقل\b/.test(String(value || '').trim());
+}
+
+function hasStoredDocumentFile(value){
+  return isDataUrl(value) || isExternalFileMarker(value);
+}
+
+function getUsableImageSource(...values){
+  return values.find(value=>{
+    const src = String(value || '').trim();
+    return isImageDataUrl(src) || src.startsWith('blob:') || /^https?:\/\//.test(src);
+  }) || '';
+}
+
 function cloneWithoutAttachmentPayload(data){
   return JSON.parse(JSON.stringify(data,(key,value)=>{
     if((key==='fileData'||key==='photoData') && typeof value==='string'){
-      return `[محفوظ كملف مستقل - ${Math.round(value.length/1024)} كيلوبايت]`;
+      if(isDataUrl(value)) return `[محفوظ كملف مستقل - ${Math.round(value.length/1024)} كيلوبايت]`;
+      if(isExternalFileMarker(value)) return value;
     }
     return value;
   }));
@@ -637,6 +661,101 @@ async function readJsonFilesFromDirectory(rootHandle, candidates, filter=()=>tru
   return {items, source:found.path};
 }
 
+function fileToDataUrl(file){
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onload = e=>resolve(e.target.result);
+    reader.onerror = ()=>reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function readFileHandleAsDataUrl(fileHandle){
+  const file = await fileHandle.getFile();
+  return fileToDataUrl(file);
+}
+
+function fileNameBase(name){
+  return safeFileName(String(name || '').replace(/\.[^.]+$/,''), '');
+}
+
+async function findEmployeeDocumentsDirectory(employeesRoot, emp){
+  const preferredName = safeFileName(emp.name || `موظف ${emp.id}`, 'موظف');
+  const candidates = new Set([preferredName]);
+  try{
+    const empDir = await employeesRoot.getDirectoryHandle(preferredName, {create:false});
+    return await empDir.getDirectoryHandle('المستندات', {create:false});
+  } catch(err){
+    if(err?.name !== 'NotFoundError') throw err;
+  }
+  for await (const [name,handle] of employeesRoot.entries()){
+    if(handle.kind !== 'directory' || !candidates.has(safeFileName(name,'مجلد'))) continue;
+    try{
+      return await handle.getDirectoryHandle('المستندات', {create:false});
+    } catch(err){
+      if(err?.name !== 'NotFoundError') throw err;
+    }
+  }
+  return null;
+}
+
+async function findDocumentFileDataUrl(documentsDir, docType, doc={}){
+  if(!documentsDir?.entries) return '';
+  const label = DOC_TYPE_LABELS[docType] || docType || '';
+  const candidateNames = new Set([
+    safeFileName(doc.fileName || '', ''),
+    safeFileName(label, '')
+  ].filter(Boolean));
+  const candidateBases = new Set([
+    fileNameBase(doc.fileName),
+    fileNameBase(label)
+  ].filter(Boolean));
+  for await (const [name,handle] of documentsDir.entries()){
+    if(handle.kind !== 'file') continue;
+    const safeName = safeFileName(name, '');
+    const base = fileNameBase(name);
+    if(candidateNames.has(safeName) || candidateBases.has(base)){
+      return readFileHandleAsDataUrl(handle);
+    }
+  }
+  return '';
+}
+
+async function hydrateImportedEmployeeFiles(rootHandle, data){
+  if(!data?.employees?.length) return data;
+  let employeesRoot = null;
+  try{
+    employeesRoot = await rootHandle.getDirectoryHandle('الموظفين', {create:false});
+  } catch(err){
+    return data;
+  }
+  for(const emp of data.employees){
+    try{
+      const documentsDir = await findEmployeeDocumentsDirectory(employeesRoot, emp);
+      if(!documentsDir) continue;
+      if(!emp.documents) emp.documents = {};
+      for(const docType of Object.keys(DOC_TYPE_LABELS)){
+        const doc = emp.documents[docType] || {};
+        const needsDocumentPayload = !isDataUrl(doc.fileData);
+        const needsProfilePhoto = docType === 'photo' && !getUsableImageSource(emp.photoData, doc.fileData);
+        if(!needsDocumentPayload && !needsProfilePhoto) continue;
+        const fileData = await findDocumentFileDataUrl(documentsDir, docType, doc);
+        if(!fileData) continue;
+        const ext = extensionFromMime(getMimeFromDataUrl(fileData));
+        emp.documents[docType] = {
+          ...doc,
+          fileData,
+          fileName:doc.fileName || `${DOC_TYPE_LABELS[docType] || docType}.${ext}`
+        };
+        if(docType === 'photo') emp.photoData = fileData;
+      }
+    } catch(err){
+      console.warn('تعذر تحميل مرفقات الموظف من المجلد:', emp?.name, err);
+    }
+  }
+  return data;
+}
+
 async function folderHasEntries(directoryHandle){
   if(!directoryHandle?.values) return false;
   for await (const _entry of directoryHandle.values()) return true;
@@ -662,7 +781,10 @@ async function loadHrDataFromFolder(rootHandle){
   ]);
   if(fullDb){
     const data = fullDb.data?.data || fullDb.data;
-    if(hasMeaningfulHrData(data)) return {data, source:fullDb.path, found:true};
+    if(hasMeaningfulHrData(data)){
+      await hydrateImportedEmployeeFiles(rootHandle,data);
+      return {data, source:fullDb.path, found:true};
+    }
   }
 
   const employees = await readFirstJsonPath(rootHandle,[
@@ -754,6 +876,7 @@ async function loadHrDataFromFolder(rootHandle){
     fingerprintCodes:fingerprintCodes?.data || {}
   };
   if(hasMeaningfulHrData(reconstructed)){
+    await hydrateImportedEmployeeFiles(rootHandle,reconstructed);
     const sources = [employees?.path, schedules?.path, employers?.path, individualEmployees.source, individualSchedules.source].filter(Boolean).join(' + ');
     return {data:reconstructed, source:sources || 'ملفات قاعدة البيانات المنفصلة', found:true};
   }
@@ -1430,7 +1553,7 @@ async function writeHrmsFilesToDirectory(rootHandle, syncedAt){
     await writeJsonFile(dbEmployeesDir,safeFileName(`${emp.name || 'موظف'} - ${emp.id}.json`),cloneWithoutAttachmentPayload(emp));
     const docs = emp.documents || {};
     for(const [docType,doc] of Object.entries(docs)){
-      if(!doc?.fileData) continue;
+      if(!isDataUrl(doc?.fileData)) continue;
       const fileName = buildDocumentFileName(docType,doc);
       const saved = await writeDataUrlFile(empDocsDir,fileName,doc.fileData);
       docsIndex.push({
@@ -1447,7 +1570,7 @@ async function writeHrmsFilesToDirectory(rootHandle, syncedAt){
         size:saved.size
       });
     }
-    if(emp.photoData && !docs.photo?.fileData){
+    if(isDataUrl(emp.photoData) && !isDataUrl(docs.photo?.fileData)){
       const saved = await writeDataUrlFile(empDocsDir,'الصورة الشخصية.png',emp.photoData);
       docsIndex.push({
         employeeId:emp.id,
@@ -1826,8 +1949,9 @@ function renderEmployees(){
   }
   grid.innerHTML = emps.map(emp=>{
     const c = getCountryByCode(emp.nationality||'');
-    const avatarHtml = emp.photoData
-      ? `<div class="emp-avatar"><img src="${emp.photoData}" alt=""></div>`
+    const photoSrc = getUsableImageSource(emp.photoData, emp.documents?.photo?.fileData);
+    const avatarHtml = photoSrc
+      ? `<div class="emp-avatar"><img src="${escapeHtml(photoSrc)}" alt=""></div>`
       : `<div class="emp-avatar" style="background:${getAvatarColor(emp.id)}22;color:${getAvatarColor(emp.id)}">${getInitials(emp.name)}</div>`;
     return `<div class="emp-card" onclick="openProfile('${emp.id}')">
       ${avatarHtml}
@@ -1847,7 +1971,8 @@ function filterEmployees(q){
   if(!emps.length){ grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><p>لا توجد نتائج</p></div>`; return; }
   grid.innerHTML = emps.map(emp=>{
     const c = getCountryByCode(emp.nationality||'');
-    const avatarHtml = emp.photoData ? `<div class="emp-avatar"><img src="${emp.photoData}" alt=""></div>` : `<div class="emp-avatar" style="background:${getAvatarColor(emp.id)}22;color:${getAvatarColor(emp.id)}">${getInitials(emp.name)}</div>`;
+    const photoSrc = getUsableImageSource(emp.photoData, emp.documents?.photo?.fileData);
+    const avatarHtml = photoSrc ? `<div class="emp-avatar"><img src="${escapeHtml(photoSrc)}" alt=""></div>` : `<div class="emp-avatar" style="background:${getAvatarColor(emp.id)}22;color:${getAvatarColor(emp.id)}">${getInitials(emp.name)}</div>`;
     return `<div class="emp-card" onclick="openProfile('${emp.id}')">${avatarHtml}<div class="emp-info"><h3>${emp.name}</h3><p>${emp.position||'—'}</p><p style="font-size:12px;color:var(--text3)">${c.flag} ${c.name}</p><span class="emp-badge">${emp.employer||'—'}</span></div></div>`;
   }).join('');
 }
@@ -2003,7 +2128,8 @@ function openProfile(id){
   const emp = appData.employees.find(e=>e.id===id);
   if(!emp) return;
   const c = getCountryByCode(emp.nationality||'');
-  const avatarHtml = emp.photoData ? `<img src="${emp.photoData}" alt="" style="width:100%;height:100%;object-fit:cover">` : `<span style="font-size:32px;font-weight:700;color:${getAvatarColor(emp.id)}">${getInitials(emp.name)}</span>`;
+  const photoSrc = getUsableImageSource(emp.photoData, emp.documents?.photo?.fileData);
+  const avatarHtml = photoSrc ? `<img src="${escapeHtml(photoSrc)}" alt="" style="width:100%;height:100%;object-fit:cover">` : `<span style="font-size:32px;font-weight:700;color:${getAvatarColor(emp.id)}">${getInitials(emp.name)}</span>`;
   
   const docTypes = [
     {key:'photo',name:'الصورة الشخصية',icon:'📷'},
@@ -2015,7 +2141,7 @@ function openProfile(id){
 
   const docsHtml = docTypes.map(dt=>{
     const doc = emp.documents?.[dt.key];
-    const hasDoc = doc && doc.fileData;
+    const hasDoc = doc && hasStoredDocumentFile(doc.fileData);
     return `<div class="doc-upload-card ${hasDoc?'has-doc':''}" onclick="openDocModal('${dt.key}','${emp.id}')">
       <div style="font-size:28px">${dt.icon}</div>
       <div class="doc-name">${dt.name}</div>
