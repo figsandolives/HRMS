@@ -588,12 +588,97 @@ async function readJsonFile(directoryHandle, fileName){
   const file = await fileHandle.getFile();
   const text = await file.text();
   if(!text.trim()) return {};
-  return JSON.parse(text);
+  return JSON.parse(text.replace(/^\uFEFF/,''));
 }
 
 async function readJsonFileByPath(rootHandle, parts){
   const dir = await getDirectoryIfExists(rootHandle, parts.slice(0,-1));
   return readJsonFile(dir, parts[parts.length-1]);
+}
+
+async function readFirstJsonPath(rootHandle, candidates){
+  for(const parts of candidates){
+    try{
+      return {data:await readJsonFileByPath(rootHandle,parts), path:parts.join('/')};
+    } catch(err){
+      if(err?.name !== 'NotFoundError') throw err;
+    }
+  }
+  return null;
+}
+
+async function folderHasEntries(directoryHandle){
+  if(!directoryHandle?.values) return false;
+  for await (const _entry of directoryHandle.values()) return true;
+  return false;
+}
+
+async function folderLooksLikeDatabase(rootHandle){
+  if(rootHandle.name === 'قاعدة البيانات') return folderHasEntries(rootHandle);
+  try{
+    const dbDir = await rootHandle.getDirectoryHandle('قاعدة البيانات', {create:false});
+    return folderHasEntries(dbDir);
+  } catch(err){
+    return false;
+  }
+}
+
+async function loadHrDataFromFolder(rootHandle){
+  const fullDb = await readFirstJsonPath(rootHandle,[
+    ['قاعدة البيانات','قاعدة البيانات الكاملة.json'],
+    ['قاعدة البيانات الكاملة.json'],
+    ['قاعدة البيانات','قاعدة بيانات بدون المرفقات.json'],
+    ['قاعدة بيانات بدون المرفقات.json']
+  ]);
+  if(fullDb){
+    const data = fullDb.data?.data || fullDb.data;
+    if(hasMeaningfulHrData(data)) return {data, source:fullDb.path, found:true};
+  }
+
+  const employees = await readFirstJsonPath(rootHandle,[
+    ['قاعدة البيانات','الموظفين','كل الموظفين.json'],
+    ['الموظفين','كل الموظفين.json'],
+    ['كل الموظفين.json']
+  ]);
+  const schedules = await readFirstJsonPath(rootHandle,[
+    ['قاعدة البيانات','جداول الدوامات','كل جداول الدوامات.json'],
+    ['جداول الدوامات','كل جداول الدوامات.json'],
+    ['كل جداول الدوامات.json']
+  ]);
+  const employers = await readFirstJsonPath(rootHandle,[
+    ['قاعدة البيانات','جهات العمل.json'],
+    ['جهات العمل.json']
+  ]);
+  const reminders = await readFirstJsonPath(rootHandle,[
+    ['قاعدة البيانات','التذكيرات.json'],
+    ['التذكيرات.json']
+  ]);
+  const settings = await readFirstJsonPath(rootHandle,[
+    ['قاعدة البيانات','الإعدادات.json'],
+    ['الإعدادات.json']
+  ]);
+  const fingerprintPunches = await readFirstJsonPath(rootHandle,[
+    ['قاعدة البيانات','تقرير البصمة.json'],
+    ['تقرير البصمة.json']
+  ]);
+  const fingerprintCodes = await readFirstJsonPath(rootHandle,[
+    ['قاعدة البيانات','رموز دخول البصمة.json'],
+    ['رموز دخول البصمة.json']
+  ]);
+
+  const reconstructed = {
+    employees:employees?.data || [],
+    schedules:schedules?.data || {},
+    employers:employers?.data || [],
+    reminders:reminders?.data || [],
+    settings:settings?.data || {},
+    fingerprintPunches:fingerprintPunches?.data || [],
+    fingerprintCodes:fingerprintCodes?.data || {}
+  };
+  if(hasMeaningfulHrData(reconstructed)){
+    return {data:reconstructed, source:'ملفات قاعدة البيانات المنفصلة', found:true};
+  }
+  return {data:null, source:fullDb?.path || '', found:Boolean(fullDb || employees || schedules || employers || await folderLooksLikeDatabase(rootHandle))};
 }
 
 async function writeDataUrlFile(directoryHandle, fileName, dataUrl){
@@ -739,8 +824,12 @@ async function restoreSavedDirectoryHandle(){
     if(hasPermission){
       if(!hasMeaningfulHrData()){
         const imported = await tryImportDataFromFolder({silent:true, overwrite:false});
-        if(imported){
+        if(imported.imported){
           setFolderStatus(`تم تحميل بيانات المجلد تلقائياً: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
+          return;
+        }
+        if(imported.found){
+          setFolderStatus('المجلد يحتوي على ملفات قاعدة بيانات، لكن لم أستطع قراءة بيانات منها. لن تتم المزامنة حتى لا تُكتب أصفار فوق بياناتك.', 'error');
           return;
         }
       }
@@ -1351,7 +1440,7 @@ async function tryImportDataFromFolder({silent=false, overwrite=true}={}){
       setFolderStatus('اختر مجلد الحفظ أولاً ثم اضغط استيراد البيانات.', 'warn');
       showToast('اختر مجلد الحفظ أولاً','error');
     }
-    return false;
+    return {imported:false, found:false, reason:'no-folder'};
   }
   if(!silent) setFolderStatus('جاري استيراد البيانات من المجلد...', 'warn');
   try{
@@ -1361,37 +1450,41 @@ async function tryImportDataFromFolder({silent=false, overwrite=true}={}){
         setFolderStatus('لا توجد صلاحية قراءة من المجلد.', 'error');
         showToast('لم يتم منح صلاحية الوصول','error');
       }
-      return false;
+      return {imported:false, found:false, reason:'permission'};
     }
-    const exported = await readJsonFileByPath(selectedSaveDirectoryHandle,['قاعدة البيانات','قاعدة البيانات الكاملة.json']);
-    const importedData = exported?.data || exported;
-    if(!hasMeaningfulHrData(importedData)){
+    const loaded = await loadHrDataFromFolder(selectedSaveDirectoryHandle);
+    if(!loaded.data || !hasMeaningfulHrData(loaded.data)){
       if(!silent){
-        setFolderStatus('المجلد لا يحتوي على بيانات سابقة. سيتم البدء كقاعدة جديدة.', 'success');
-        showToast('المجلد جديد وجاهز للحفظ');
+        if(loaded.found){
+          setFolderStatus('وجدت ملفات قاعدة بيانات، لكنها لا تحتوي على بيانات قابلة للقراءة. لم تتم المزامنة حتى لا تُستبدل بياناتك.', 'error');
+          showToast('تعذر قراءة بيانات المجلد','error');
+        } else {
+          setFolderStatus('المجلد لا يحتوي على بيانات سابقة. سيتم البدء كقاعدة جديدة.', 'success');
+          showToast('المجلد جديد وجاهز للحفظ');
+        }
       }
-      return false;
+      return {imported:false, found:loaded.found, reason:loaded.found ? 'unreadable' : 'empty'};
     }
-    if(!overwrite && hasMeaningfulHrData(appData)) return false;
-    applyImportedHrData(importedData,'folder');
+    if(!overwrite && hasMeaningfulHrData(appData)) return {imported:false, found:true, reason:'local-has-data'};
+    applyImportedHrData(loaded.data,'folder');
     appData.settings.saveFolderName = selectedSaveDirectoryHandle.name;
     appData.settings.importedAt = new Date().toISOString();
     localStorage.setItem('hrmsData',JSON.stringify(appData));
     renderFolderSettings();
-    setFolderStatus(`تم استيراد البيانات: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
+    setFolderStatus(`تم استيراد البيانات من ${loaded.source}: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
     if(!silent) showToast('تم استيراد البيانات من المجلد');
-    return true;
+    return {imported:true, found:true, reason:'imported', source:loaded.source};
   } catch(err){
     if(err?.name === 'NotFoundError'){
       if(!silent) setFolderStatus('المجلد لا يحتوي على قاعدة بيانات سابقة. سيتم البدء كقاعدة جديدة.', 'success');
-      return false;
+      return {imported:false, found:false, reason:'empty'};
     }
     console.error(err);
     if(!silent){
       setFolderStatus('تعذر استيراد البيانات. تأكد أن المجلد يحتوي على قاعدة البيانات/قاعدة البيانات الكاملة.json', 'error');
       showToast('فشل استيراد البيانات','error');
     }
-    return false;
+    return {imported:false, found:true, reason:'error', error:err};
   }
 }
 
@@ -1407,9 +1500,14 @@ async function syncDataToFolder(userTriggered=false){
   }
   if(userTriggered && !hasMeaningfulHrData()){
     const imported = await tryImportDataFromFolder({silent:true, overwrite:false});
-    if(imported){
+    if(imported.imported){
       setFolderStatus(`تم تحميل بيانات المجلد تلقائياً: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
       showToast('تم تحميل البيانات من المجلد');
+      return;
+    }
+    if(imported.found){
+      setFolderStatus('المجلد يحتوي على ملفات قاعدة بيانات، لكن لم أستطع قراءة بيانات منها. تم إيقاف المزامنة حتى لا تُكتب أصفار فوق بياناتك.', 'error');
+      showToast('تم إيقاف المزامنة لحماية البيانات','error');
       return;
     }
   }
@@ -2746,7 +2844,7 @@ async function chooseFolder(){
     saveData({sync:false,firebase:false});
     renderFolderSettings();
     const imported = await tryImportDataFromFolder({silent:false, overwrite:true});
-    if(imported) return;
+    if(imported.imported || imported.found) return;
     if(hasMeaningfulHrData()){
       await syncDataToFolder(true);
     } else {
