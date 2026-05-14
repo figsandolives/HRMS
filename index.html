@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>نظام إدارة الموارد البشرية</title>
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800&family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ===== LOGIN SCREEN ===== -->
+<div id="loginScreen">
+  <div class="login-bg-circles"><span></span><span></span><span></span></div>
+  <div class="login-logo">
+    <div class="logo-icon">
+      <svg viewBox="0 0 48 48"><path d="M24 4C12.95 4 4 12.95 4 24s8.95 20 20 20 20-8.95 20-20S35.05 4 24 4zm0 6a7 7 0 1 1 0 14A7 7 0 0 1 24 10zm0 28c-5.33 0-10-2.67-12.8-6.67C11.27 28.09 17.44 26 24 26c6.56 0 12.73 2.09 12.8 5.33C34 35.33 29.33 38 24 38z"/></svg>
+    </div>
+    <div class="login-title">نظام إدارة الموارد البشرية</div>
+    <div class="login-subtitle">Human Resources Management System</div>
+  </div>
+  <div class="login-card">
+    <span class="login-label">أدخل رمز الدخول</span>
+    <div class="pin-display" id="pinDisplay">
+      <div class="pin-dot" id="dot0">●</div>
+      <div class="pin-dot" id="dot1">●</div>
+      <div class="pin-dot" id="dot2">●</div>
+      <div class="pin-dot" id="dot3">●</div>
+    </div>
+    <p class="login-hint">اكتب الرمز مباشرة ثم اضغط Enter</p>
+    <input type="password" id="pinInput" maxlength="4" inputmode="numeric" autofocus>
+    <button class="login-enter-btn" onclick="tryLogin()">
+      <span>دخول</span>
+      <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+    </button>
+    <div class="error-msg" id="errorMsg"></div>
+  </div>
+</div>
+
+<!-- ===== MAIN APP ===== -->
+<div id="mainApp">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <div class="sidebar-logo-icon">
+        <svg viewBox="0 0 48 48"><path d="M24 4C12.95 4 4 12.95 4 24s8.95 20 20 20 20-8.95 20-20S35.05 4 24 4zm0 6a7 7 0 1 1 0 14A7 7 0 0 1 24 10zm0 28c-5.33 0-10-2.67-12.8-6.67C11.27 28.09 17.44 26 24 26c6.56 0 12.73 2.09 12.8 5.33C34 35.33 29.33 38 24 38z"/></svg>
+      </div>
+      <div>
+        <div class="sidebar-logo-text">HRMS</div>
+        <div class="sidebar-logo-sub">نظام الموارد البشرية</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav" id="sidebarNav">
+      <div class="nav-item active" data-page="employees" onclick="navTo('employees',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        الموظفون
+      </div>
+      <div class="nav-item" data-page="addEmployee" onclick="navTo('addEmployee',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/><line x1="12" y1="14" x2="12" y2="20"/><line x1="9" y1="17" x2="15" y2="17"/></svg>
+        إدراج موظف
+      </div>
+      <div class="nav-item" data-page="schedule" onclick="navTo('schedule',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        جدول الدوامات
+      </div>
+      <div class="nav-item" data-page="fingerprint" onclick="navTo('fingerprint',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1C6.48 1 2 5.48 2 11v2c0 1.1.9 2 2 2h1v-4c0-3.87 3.13-7 7-7s7 3.13 7 7v4h1c1.1 0 2-.9 2-2v-2c0-5.52-4.48-10-10-10z"/><path d="M9 17h6M12 17v4"/></svg>
+        تقرير البصمة
+      </div>
+      <div class="nav-item" data-page="reminders" onclick="navTo('reminders',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        تذكيرات
+        <span class="nav-badge" id="reminderBadge">0</span>
+      </div>
+      <div class="nav-item" data-page="notifications" onclick="navTo('notifications',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        إشعارات
+      </div>
+      <div class="nav-item" data-page="bookGeneral" onclick="navTo('bookGeneral',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+        كتاب عام
+      </div>
+      <div class="nav-item" data-page="bookDeduct" onclick="navTo('bookDeduct',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+        كتاب خصم
+      </div>
+      <div class="nav-item" data-page="bookWarn" onclick="navTo('bookWarn',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        كتاب تنبيه
+      </div>
+      <div class="nav-item" data-page="bookNotice" onclick="navTo('bookNotice',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        كتاب لفت نظر
+      </div>
+      <div class="nav-item" data-page="decisions" onclick="navTo('decisions',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
+        قرارات وتعميمات
+      </div>
+      <div class="nav-item" data-page="employers" onclick="navTo('employers',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        جهات العمل
+      </div>
+      <div class="nav-item" data-page="settings" onclick="navTo('settings',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        الإعدادات
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <button class="btn btn-secondary" style="width:100%;justify-content:center;font-size:13px" onclick="logout()">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        تسجيل الخروج
+      </button>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <main class="main-content">
+    <div class="topbar">
+      <div id="topbarBack" class="topbar-back-btn" style="display:none" onclick="goBack()">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        رجوع
+      </div>
+      <div class="topbar-title" id="topbarTitle">الموظفون</div>
+      <div class="topbar-actions" id="topbarActions"></div>
+    </div>
+
+    <!-- PAGES -->
+    <div class="page-content">
+
+      <!-- EMPLOYEES PAGE -->
+      <div class="page active" id="page-employees">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+          <div style="font-size:14px;color:var(--text2)">إجمالي الموظفين: <strong id="empCount" style="color:var(--heading)">0</strong></div>
+          <div style="display:flex;gap:10px">
+            <input class="form-control" placeholder="بحث عن موظف..." style="width:240px;height:40px;font-size:14px" oninput="filterEmployees(this.value)" id="empSearchInput">
+            <button class="btn btn-primary btn-sm" onclick="navTo('addEmployee')">
+              <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              إضافة موظف
+            </button>
+          </div>
+        </div>
+        <div class="employees-grid" id="employeesGrid">
+          <div class="empty-state" style="grid-column:1/-1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>
+            <p>لا يوجد موظفون بعد. ابدأ بإضافة موظف جديد</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ADD EMPLOYEE PAGE -->
+      <div class="page" id="page-addEmployee">
+        <div style="max-width:800px">
+          <div class="card">
+            <div class="section-title">المعلومات الأساسية</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">الاسم الكامل *</label>
+                <input class="form-control" id="empName" placeholder="أدخل الاسم الكامل">
+              </div>
+              <div class="form-group">
+                <label class="form-label">الجنسية *</label>
+                <select class="form-control" id="empNationality">
+                  <option value="">اختر الجنسية...</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">المسمى الوظيفي *</label>
+                <input class="form-control" id="empPosition" placeholder="مثال: محاسب، مدير مبيعات">
+              </div>
+              <div class="form-group">
+                <label class="form-label">جهة العمل *</label>
+                <select class="form-control" id="empEmployer">
+                  <option value="">اختر جهة العمل...</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="section-title" style="margin-top:8px">معلومات التواصل</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">رقم الهاتف الكويتي</label>
+                <div class="phone-wrapper">
+                  <div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--bg4);border:1px solid var(--border2);border-radius:var(--radius2);white-space:nowrap;font-size:14px">
+                    🇰🇼 +965
+                  </div>
+                  <input class="form-control" id="empKwPhone" placeholder="XXXXXXXX" maxlength="8" oninput="toEnglishDigits(this)" style="flex:1">
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">رقم الهاتف الدولي (اختياري)</label>
+                <div class="phone-wrapper" style="position:relative">
+                  <button class="country-flag-btn" id="intlFlagBtn" onclick="toggleCountryDropdown('intlDropdown')">🌍 اختر</button>
+                  <div class="country-dropdown" id="intlDropdown">
+                    <input class="country-search" placeholder="بحث عن دولة..." oninput="filterCountries('intlDropdown',this.value)">
+                    <div id="intlCountryList"></div>
+                  </div>
+                  <input class="form-control" id="empIntlPhone" placeholder="رقم الهاتف" oninput="toEnglishDigits(this)" style="flex:1">
+                </div>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">عدد ساعات العمل اليومي *</label>
+                <input class="form-control" id="empHours" placeholder="مثال: 8" type="text" oninput="toEnglishDigits(this);updateHoursBar()">
+              </div>
+            </div>
+
+            <div class="section-title" style="margin-top:8px">توزيع ساعات العمل</div>
+            <div class="radio-group" style="margin-bottom:20px">
+              <label class="radio-option selected" id="radioFixed">
+                <input type="radio" name="schedType" value="fixed" checked onchange="onScheduleTypeChange('fixed')">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/></svg>
+                ساعات ثابتة
+              </label>
+              <label class="radio-option" id="radioVariable">
+                <input type="radio" name="schedType" value="variable" onchange="onScheduleTypeChange('variable')">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                حسب الجدول
+              </label>
+            </div>
+
+            <div id="fixedHoursSection">
+              <div style="display:flex;align-items:center;gap:12px">
+                <div style="flex:1">
+                  <div class="hours-bar" id="empHoursBar">
+                    <div class="hours-bar-remaining" id="hoursBarRemaining">أدخل عدد ساعات العمل أولاً</div>
+                  </div>
+                </div>
+                <button class="add-segment-btn" onclick="openAddSegmentModal()" title="إضافة فترة عمل">+</button>
+              </div>
+              <div id="segmentsList" style="margin-top:10px"></div>
+            </div>
+            <div id="variableHoursSection" style="display:none;padding:20px;background:var(--bg4);border-radius:var(--radius2);text-align:center;color:var(--text2);font-size:14px">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto 10px;display:block;opacity:0.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              ساعات العمل ستُحدَّد من جدول الدوامات الأسبوعي
+            </div>
+
+            <div style="margin-top:28px;display:flex;justify-content:flex-end;gap:12px">
+              <button class="btn btn-secondary" onclick="resetAddForm()">إلغاء</button>
+              <button class="btn btn-primary" onclick="saveEmployee()">
+                <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                إضافة الموظف
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- EMPLOYEE PROFILE PAGE -->
+      <div class="page" id="page-profile">
+        <div id="profileContent"></div>
+      </div>
+
+      <!-- SCHEDULE PAGE -->
+      <div class="page" id="page-schedule">
+        <div style="margin-bottom:20px;display:flex;gap:12px;flex-wrap:wrap">
+          <div id="dayButtons" style="display:flex;gap:8px;flex-wrap:wrap;flex:1"></div>
+        </div>
+        <div id="scheduleDayContent" style="display:none">
+          <div id="scheduleUnsavedWarning" style="display:none;background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:10px 16px;font-size:13px;color:var(--gold);margin-bottom:16px">
+            ⚠️ لديك تعديلات غير محفوظة
+          </div>
+          <div class="schedule-layout">
+            <div>
+              <div class="a4-container" id="a4Sheet">
+                <div class="a4-title" id="a4Title">جدول دوام الأفرع</div>
+                <div class="schedule-branch branch-1">
+                  <div class="branch-header">دوام فرع السرة</div>
+                  <div class="schedule-drop-zone" id="zone-surra" ondrop="dropToZone(event,'surra')" ondragover="allowDrop(event)" ondragleave="leaveDrop(event)"></div>
+                </div>
+                <div class="schedule-branch branch-2">
+                  <div class="branch-header">دوام فرع أبو الحصانية</div>
+                  <div class="schedule-drop-zone" id="zone-abulhasania" ondrop="dropToZone(event,'abulhasania')" ondragover="allowDrop(event)" ondragleave="leaveDrop(event)"></div>
+                </div>
+                <div class="schedule-branch branch-3">
+                  <div class="branch-header">دوام فرع اليرموك</div>
+                  <div class="schedule-drop-zone" id="zone-yarmouk" ondrop="dropToZone(event,'yarmouk')" ondragover="allowDrop(event)" ondragleave="leaveDrop(event)"></div>
+                </div>
+                <div style="margin-top:20px;display:flex;justify-content:space-between;align-items:center;padding-top:16px;border-top:1px solid #e2e8f0">
+                  <button id="saveDayBtn" class="btn btn-secondary btn-sm" onclick="saveScheduleDay()">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/></svg>
+                    <span>حفظ</span>
+                    <span id="saveDayCheck" style="display:none;color:var(--green)">✓</span>
+                  </button>
+                  <button id="approveDayBtn" class="btn btn-primary btn-sm" onclick="approveScheduleDay()">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span>اعتماد التوزيع</span>
+                    <span id="approveDayCheck" style="display:none">✓</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="emp-staff-list">
+              <div style="font-size:14px;font-weight:600;color:var(--heading);margin-bottom:12px">الموظفون</div>
+              <div id="staffSidebar"></div>
+            </div>
+          </div>
+        </div>
+        <div id="scheduleEmpty" style="text-align:center;padding:60px 20px;color:var(--text3)">
+          <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto 16px;display:block;opacity:0.3"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <p>اختر يومًا لعرض الجدول</p>
+        </div>
+      </div>
+
+      <!-- REMINDERS PAGE -->
+      <div class="page" id="page-reminders">
+        <div id="remindersList" style="max-width:700px"></div>
+      </div>
+
+      <!-- EMPLOYERS PAGE -->
+      <div class="page" id="page-employers">
+        <div style="max-width:600px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+            <span style="color:var(--text2);font-size:14px">جهات العمل المضافة: <strong id="employerCount" style="color:var(--heading)">0</strong></span>
+            <button class="btn btn-primary btn-sm" onclick="openAddEmployerModal()">
+              <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              إضافة جهة عمل
+            </button>
+          </div>
+          <div id="employersList"></div>
+        </div>
+      </div>
+
+      <div class="page" id="page-addEmployer">
+        <div style="max-width:900px">
+          <div class="section-title">إضافة جهة عمل</div>
+          <div class="card">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">اسم جهة العمل</label>
+                <input class="form-control" id="employerPageName" placeholder="مثال: فرع السرة">
+              </div>
+              <div class="form-group">
+                <label class="form-label">إحداثيات المكان</label>
+                <input class="form-control" id="employerCoordinates" placeholder="(29.3075520, 47.9741215)" onchange="updateEmployerMapFromInput()">
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">موقع الفرع والزون</label>
+              <div id="employerMap"></div>
+            </div>
+            <div class="form-group">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px">
+                <label class="form-label" style="margin:0">حدد حجم الزون المناسب للمكان</label>
+                <span class="tag tag-blue" id="employerZoneRadiusLabel">150 متر</span>
+              </div>
+              <input class="zone-range" id="employerZoneRadius" type="range" min="30" max="1000" step="10" value="150" oninput="updateEmployerZoneRadius(this.value)">
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px">
+              <button class="btn btn-secondary" onclick="navTo('employers')">إلغاء</button>
+              <button class="btn btn-primary" onclick="saveEmployer()">حفظ جهة العمل</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SETTINGS PAGE -->
+      <div class="page" id="page-settings">
+        <div style="max-width:700px">
+          <div class="section-title">مسار حفظ البيانات</div>
+          <div class="card" style="margin-bottom:20px">
+            <div class="form-group">
+              <label class="form-label">مجلد حفظ البيانات</label>
+              <div style="display:flex;gap:10px;flex-wrap:wrap">
+                <input class="form-control" id="savePathInput" placeholder="لم يتم اختيار مجلد حفظ" readonly style="flex:1;min-width:240px">
+                <button class="btn btn-secondary" onclick="chooseFolder()">
+                  <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                  اختيار مجلد
+                </button>
+                <button class="btn btn-primary" onclick="syncDataToFolder(true)" id="syncNowBtn">
+                  <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.54 6.22"/><path d="M3 12A9 9 0 0 1 18.54 5.78"/><path d="M3 21v-6h6"/><path d="M21 3v6h-6"/></svg>
+                  مزامنة الآن
+                </button>
+              </div>
+              <div id="folderSaveStatus" class="folder-status">اختر مجلدًا ليتم حفظ قاعدة البيانات والملفات داخله تلقائيًا.</div>
+            </div>
+          </div>
+          <div class="section-title">البصمة</div>
+          <div class="card" style="margin-bottom:20px">
+            <div class="setting-row" style="margin-bottom:0">
+              <div>
+                <div class="setting-label">رموز دخول البصمة</div>
+                <div class="setting-sub">تحديد رمز خاص لكل موظف لاستخدام تطبيق البصمة</div>
+              </div>
+              <button class="btn btn-primary" onclick="navTo('fingerprintCodes')">تحديد رموز الدخول للبصمة</button>
+            </div>
+          </div>
+          <div class="section-title">المظهر</div>
+          <div class="card" style="margin-bottom:20px">
+            <div class="setting-row" style="margin-bottom:0">
+              <div>
+                <div class="setting-label">الوضع الداكن</div>
+                <div class="setting-sub">تشغيل أو إيقاف الوضع الداكن</div>
+              </div>
+              <button class="theme-switch" id="themeSwitch" type="button" role="switch" onclick="toggleTheme()" aria-label="تبديل الوضع الداكن" aria-checked="false"></button>
+            </div>
+          </div>
+          <div class="section-title">معلومات النظام</div>
+          <div class="card">
+            <div class="setting-row" style="border:none;background:transparent;padding:8px 0">
+              <div><div class="setting-label">الإصدار</div><div class="setting-sub">HRMS v2.0</div></div>
+            </div>
+            <div class="setting-row" style="border:none;background:transparent;padding:8px 0">
+              <div><div class="setting-label">قاعدة البيانات</div><div class="setting-sub" id="databaseStorageSub">تخزين محلي + مزامنة ملفات عند اختيار مجلد</div></div>
+              <span class="tag tag-amber" id="databaseStorageTag">بانتظار المجلد</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- OTHER PAGES -->
+      <div class="page" id="page-notifications"><div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><p>لا توجد إشعارات حالياً</p></div></div>
+      <div class="page" id="page-fingerprint">
+        <div class="fingerprint-report">
+          <div class="fingerprint-toolbar">
+            <div>
+              <div class="section-title" style="margin-bottom:6px">تقرير البصمة</div>
+              <div class="setting-sub" id="fingerprintReportSubtitle"></div>
+            </div>
+            <div class="fingerprint-controls">
+              <select class="form-control" id="fingerprintReportMode" onchange="renderFingerprintReport()">
+                <option value="day">كل الموظفين</option>
+                <option value="employee">موظف محدد</option>
+              </select>
+              <input class="form-control" type="date" id="fingerprintDayDate" onchange="renderFingerprintReport()">
+              <select class="form-control" id="fingerprintEmployeeSelect" onchange="renderFingerprintReport()" style="display:none"></select>
+              <input class="form-control" type="date" id="fingerprintFromDate" onchange="renderFingerprintReport()" style="display:none">
+              <input class="form-control" type="date" id="fingerprintToDate" onchange="renderFingerprintReport()" style="display:none">
+            </div>
+          </div>
+          <div id="fingerprintReportView"></div>
+        </div>
+      </div>
+      <div class="page" id="page-fingerprintCodes">
+        <div style="max-width:760px">
+          <div class="section-title">رموز دخول البصمة</div>
+          <div class="card">
+            <div id="fingerprintCodesList"></div>
+            <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px">
+              <button class="btn btn-secondary" onclick="navTo('settings')">رجوع للإعدادات</button>
+              <button class="btn btn-primary" onclick="saveFingerprintCodes()">حفظ</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="page" id="page-bookGeneral"><div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/></svg><p>الكتاب العام فارغ</p></div></div>
+      <div class="page" id="page-bookDeduct"><div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16"/></svg><p>لا توجد قرارات خصم</p></div></div>
+      <div class="page" id="page-bookWarn"><div class="empty-state"><p>لا توجد تنبيهات</p></div></div>
+      <div class="page" id="page-bookNotice"><div class="empty-state"><p>لا يوجد كتب لفت نظر</p></div></div>
+      <div class="page" id="page-decisions"><div class="empty-state"><p>لا توجد قرارات أو تعميمات</p></div></div>
+
+    </div><!-- /page-content -->
+  </main>
+</div>
+
+<!-- MODALS -->
+<!-- Add Segment Modal -->
+<div class="modal-overlay" id="segmentModal">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header">
+      <div class="modal-title">إضافة فترة عمل</div>
+      <button class="modal-close" onclick="closeModal('segmentModal')">✕</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">من الساعة</label>
+        <div class="time-picker" data-time-picker data-input="segFrom" tabindex="0" role="button" aria-label="من الساعة">
+          <input type="hidden" id="segFrom">
+          <span class="time-picker-display">--:-- --</span>
+          <svg class="time-picker-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">إلى الساعة</label>
+        <div class="time-picker" data-time-picker data-input="segTo" tabindex="0" role="button" aria-label="إلى الساعة">
+          <input type="hidden" id="segTo">
+          <span class="time-picker-display">--:-- --</span>
+          <svg class="time-picker-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        </div>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">جهة عمل الدوام</label>
+      <select class="form-control" id="segEmployer"></select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">مهام العمل</label>
+      <div id="tasksList">
+        <div class="task-input-row" style="display:flex;gap:8px;margin-bottom:8px">
+          <input class="form-control" placeholder="أدخل المهمة" style="flex:1">
+        </div>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" style="margin-top:4px" onclick="addTaskInput()">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        إضافة مهمة
+      </button>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px">
+      <button class="btn btn-secondary" onclick="closeModal('segmentModal')">إلغاء</button>
+      <button class="btn btn-primary" onclick="saveSegment()">إضافة الفترة</button>
+    </div>
+  </div>
+</div>
+
+<!-- Employer Modal -->
+<div class="modal-overlay" id="employerModal">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header">
+      <div class="modal-title">إضافة جهة عمل</div>
+      <button class="modal-close" onclick="closeModal('employerModal')">✕</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">اسم جهة العمل *</label>
+      <input class="form-control" id="employerNameInput" placeholder="مثال: فرع السرة">
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px">
+      <button class="btn btn-secondary" onclick="closeModal('employerModal')">إلغاء</button>
+      <button class="btn btn-primary" onclick="saveEmployer()">إضافة</button>
+    </div>
+  </div>
+</div>
+
+<!-- Document Modal -->
+<div class="modal-overlay" id="docModal">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <div class="modal-title" id="docModalTitle">رفع مستند</div>
+      <button class="modal-close" onclick="closeModal('docModal')">✕</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">الملف</label>
+      <input type="file" class="form-control" id="docFile" accept="image/*,.pdf" style="padding:8px">
+    </div>
+    <div id="docDatesSection">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">تاريخ التجديد</label>
+          <input class="form-control" type="date" id="docRenewDate">
+        </div>
+        <div class="form-group">
+          <label class="form-label">تاريخ الانتهاء</label>
+          <input class="form-control" type="date" id="docExpireDate">
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px">
+      <button class="btn btn-secondary" onclick="closeModal('docModal')">إلغاء</button>
+      <button class="btn btn-primary" onclick="saveDocument()">حفظ المستند</button>
+    </div>
+  </div>
+</div>
+
+<!-- Schedule Segment Modal -->
+<div class="modal-overlay" id="scheduleSegModal">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header">
+      <div class="modal-title" id="schedModalTitle">تحديد ساعات العمل</div>
+      <button class="modal-close" onclick="closeModal('scheduleSegModal')">✕</button>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">من الساعة</label>
+        <div class="time-picker" data-time-picker data-input="schedSegFrom" tabindex="0" role="button" aria-label="من الساعة">
+          <input type="hidden" id="schedSegFrom">
+          <span class="time-picker-display">--:-- --</span>
+          <svg class="time-picker-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">إلى الساعة</label>
+        <div class="time-picker" data-time-picker data-input="schedSegTo" tabindex="0" role="button" aria-label="إلى الساعة">
+          <input type="hidden" id="schedSegTo">
+          <span class="time-picker-display">--:-- --</span>
+          <svg class="time-picker-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        </div>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">مهام العمل</label>
+      <div id="schedTasksList">
+        <div class="task-input-row" style="display:flex;gap:8px;margin-bottom:8px">
+          <input class="form-control" placeholder="أدخل المهمة" style="flex:1">
+        </div>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" style="margin-top:4px" onclick="addSchedTaskInput()">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        إضافة مهمة
+      </button>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px">
+      <button class="btn btn-secondary" onclick="closeModal('scheduleSegModal')">إلغاء</button>
+      <button class="btn btn-primary" onclick="saveScheduleSegment()">إضافة للجدول</button>
+    </div>
+  </div>
+</div>
+
+<!-- Loading Screen -->
+<div class="loading-screen" id="loadingScreen">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loadingText">جاري الحفظ...</div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast">
+  <span id="toastIcon">✓</span>
+  <span id="toastMsg">تم بنجاح</span>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
