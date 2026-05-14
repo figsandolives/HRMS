@@ -585,6 +585,10 @@ async function getDirectoryIfExists(parentHandle, parts){
 
 async function readJsonFile(directoryHandle, fileName){
   const fileHandle = await directoryHandle.getFileHandle(safeFileName(fileName,'ملف'), {create:false});
+  return readJsonFileHandle(fileHandle);
+}
+
+async function readJsonFileHandle(fileHandle){
   const file = await fileHandle.getFile();
   const text = await file.text();
   if(!text.trim()) return {};
@@ -605,6 +609,32 @@ async function readFirstJsonPath(rootHandle, candidates){
     }
   }
   return null;
+}
+
+async function getFirstDirectoryByPaths(rootHandle, candidates){
+  for(const parts of candidates){
+    try{
+      return {dir:await getDirectoryIfExists(rootHandle,parts), path:parts.join('/')};
+    } catch(err){
+      if(err?.name !== 'NotFoundError') throw err;
+    }
+  }
+  return null;
+}
+
+async function readJsonFilesFromDirectory(rootHandle, candidates, filter=()=>true){
+  const found = await getFirstDirectoryByPaths(rootHandle,candidates);
+  if(!found?.dir?.entries) return {items:[], source:''};
+  const items = [];
+  for await (const [name,handle] of found.dir.entries()){
+    if(handle.kind !== 'file' || !name.endsWith('.json') || !filter(name)) continue;
+    try{
+      items.push({name,data:await readJsonFileHandle(handle)});
+    } catch(err){
+      console.warn('تعذر قراءة ملف JSON:', name, err);
+    }
+  }
+  return {items, source:found.path};
 }
 
 async function folderHasEntries(directoryHandle){
@@ -666,19 +696,68 @@ async function loadHrDataFromFolder(rootHandle){
     ['رموز دخول البصمة.json']
   ]);
 
+  const individualEmployees = await readJsonFilesFromDirectory(rootHandle,[
+    ['قاعدة البيانات','الموظفين'],
+    ['الموظفين']
+  ], name=>!['كل الموظفين.json','فهرس المستندات.json'].includes(name));
+
+  const dayNameToKey = {
+    'السبت':'sat',
+    'الأحد':'sun',
+    'الاحد':'sun',
+    'الاثنين':'mon',
+    'الثلاثاء':'tue',
+    'الأربعاء':'wed',
+    'الاربعاء':'wed',
+    'الخميس':'thu',
+    'الجمعة':'fri'
+  };
+  const individualSchedules = await readJsonFilesFromDirectory(rootHandle,[
+    ['قاعدة البيانات','جداول الدوامات'],
+    ['جداول الدوامات']
+  ], name=>!['كل جداول الدوامات.json','سجل ملفات PDF.json'].includes(name));
+
+  const employeesData = employees?.data || [];
+  const scheduleData = schedules?.data || {};
+  const rebuiltEmployees = Array.isArray(employeesData) && employeesData.length
+    ? employeesData
+    : individualEmployees.items
+      .map(item=>item.data)
+      .filter(emp=>emp && typeof emp === 'object' && emp.id && emp.name);
+  const rebuiltSchedules = scheduleData && Object.keys(scheduleData).length
+    ? scheduleData
+    : individualSchedules.items.reduce((acc,item)=>{
+      const dayName = item.name.replace(/^جدول\s+/,'').replace(/\.json$/,'').trim();
+      const key = dayNameToKey[dayName] || dayName;
+      if(item.data && typeof item.data === 'object' && item.data.zones) acc[key] = item.data;
+      return acc;
+    },{});
+  const employersData = employers?.data || [];
+  const rebuiltEmployers = Array.isArray(employersData) && employersData.length
+    ? employersData
+    : Object.values([
+      ...rebuiltEmployees.map(emp=>({id:emp.employerId || emp.employer || emp.name, name:emp.employer || ''})),
+      ...Object.values(rebuiltSchedules).flatMap(schedule=>Object.values(schedule.zones || {}).flat()).map(item=>({id:item.employerId || item.employerName || item.empId, name:item.employerName || ''}))
+    ].reduce((acc,employer)=>{
+      if(!employer.name) return acc;
+      acc[employer.id || employer.name] = {id:employer.id || employer.name, name:employer.name};
+      return acc;
+    },{}));
+
   const reconstructed = {
-    employees:employees?.data || [],
-    schedules:schedules?.data || {},
-    employers:employers?.data || [],
+    employees:rebuiltEmployees,
+    schedules:rebuiltSchedules,
+    employers:rebuiltEmployers,
     reminders:reminders?.data || [],
     settings:settings?.data || {},
     fingerprintPunches:fingerprintPunches?.data || [],
     fingerprintCodes:fingerprintCodes?.data || {}
   };
   if(hasMeaningfulHrData(reconstructed)){
-    return {data:reconstructed, source:'ملفات قاعدة البيانات المنفصلة', found:true};
+    const sources = [employees?.path, schedules?.path, employers?.path, individualEmployees.source, individualSchedules.source].filter(Boolean).join(' + ');
+    return {data:reconstructed, source:sources || 'ملفات قاعدة البيانات المنفصلة', found:true};
   }
-  return {data:null, source:fullDb?.path || '', found:Boolean(fullDb || employees || schedules || employers || await folderLooksLikeDatabase(rootHandle))};
+  return {data:null, source:fullDb?.path || '', found:Boolean(fullDb || employees || schedules || employers || individualEmployees.items.length || individualSchedules.items.length || await folderLooksLikeDatabase(rootHandle))};
 }
 
 async function writeDataUrlFile(directoryHandle, fileName, dataUrl){
