@@ -102,6 +102,40 @@ function hasMeaningfulHrData(data=appData){
   return collectionCount(data.employees) > 0 || collectionCount(data.employers) > 0 || collectionCount(data.schedules) > 0;
 }
 
+function buildEmptyHrData(settings={}){
+  return {
+    employees:[],
+    employers:[],
+    schedules:{},
+    settings,
+    reminders:[],
+    fingerprintCodes:{},
+    fingerprintPunches:[],
+    books:{general:[], deduct:[], warn:[], notice:[]},
+    decisions:[],
+    schedulePdfHistory:{}
+  };
+}
+
+function resetToFreshFolderDatabase(folderName){
+  const currentSettings = {...(appData.settings || {})};
+  const selectedAt = new Date().toISOString();
+  appData = buildEmptyHrData({
+    theme:currentSettings.theme || 'light',
+    saveFolderName:folderName || currentSettings.saveFolderName || '',
+    folderSelectedAt:selectedAt,
+    freshFolderStartedAt:selectedAt,
+    skipFirebaseHrImport:true
+  });
+  editingEmpId = null;
+  currentProfileId = null;
+  selectedDay = null;
+  scheduleState = {};
+  scheduleModified = false;
+  empSegments = [];
+  refreshAppAfterDataLoad();
+}
+
 function normalizeDigits(value){
   return String(value ?? '')
     .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
@@ -253,6 +287,7 @@ function applyImportedHrData(source, origin='folder'){
     saveFolderName:currentSettings.saveFolderName || appData.settings.saveFolderName || '',
     folderSelectedAt:currentSettings.folderSelectedAt || appData.settings.folderSelectedAt || ''
   };
+  delete appData.settings.skipFirebaseHrImport;
   if(origin === 'firebase') appData.settings.firebaseLoadedAt = new Date().toISOString();
   refreshAppAfterDataLoad();
   queueFirebaseHrSync();
@@ -264,6 +299,7 @@ function listenFirebaseHrData(){
   firebaseDb.ref('hrData').on('value', snap=>{
     const remote = snap.val();
     if(!remote || !hasMeaningfulHrData(remote) || hasMeaningfulHrData(appData)) return;
+    if(appData.settings?.skipFirebaseHrImport || appData.settings?.saveFolderName) return;
     applyImportedHrData(remote,'firebase');
     showToast('تم تحميل البيانات من Firebase');
   }, err=>console.error(err));
@@ -3041,6 +3077,8 @@ async function chooseFolder(){
       showToast('لم يتم منح صلاحية الكتابة','error');
       return;
     }
+    clearTimeout(folderSyncTimer);
+    folderSyncPending = false;
     selectedSaveDirectoryHandle = handle;
     await saveStoredDirectoryHandle(handle);
     appData.settings.saveFolderName = handle.name;
@@ -3050,12 +3088,10 @@ async function chooseFolder(){
     renderFolderSettings();
     const imported = await tryImportDataFromFolder({silent:false, overwrite:true});
     if(imported.imported || imported.found) return;
-    if(hasMeaningfulHrData()){
-      await syncDataToFolder(true);
-    } else {
-      setFolderStatus('المجلد جديد وجاهز. ابدأ بإضافة البيانات وسيتم حفظها تلقائياً.', 'success');
-      showToast('المجلد جاهز لبدء قاعدة جديدة');
-    }
+    resetToFreshFolderDatabase(handle.name);
+    setFolderStatus('المجلد الجديد فارغ. تم بدء قاعدة بيانات جديدة من الصفر.', 'success');
+    showToast('تم بدء قاعدة جديدة لهذا المجلد');
+    await syncDataToFolder(false);
   } catch(err){
     if(err?.name === 'AbortError') return;
     console.error(err);
