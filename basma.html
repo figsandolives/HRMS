@@ -41,11 +41,12 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--text);min
 .fingerprint-table{width:100%;border-collapse:separate;border-spacing:0;min-width:760px;font-family:'Cairo',sans-serif}
 .fingerprint-table th,.fingerprint-table td{border-left:1px solid var(--border);border-bottom:1px solid var(--border);padding:9px 10px;min-width:78px;height:42px;text-align:center;font-size:12px;white-space:nowrap}
 .fingerprint-table th{background:var(--panel2);color:var(--heading);font-weight:800;position:sticky;top:0;z-index:2}
-.fingerprint-table th:first-child,.fingerprint-table td:first-child{position:sticky;right:0;z-index:3;background:var(--panel3);min-width:190px;text-align:right;font-weight:800;color:var(--heading)}
+.fingerprint-table th:first-child,.fingerprint-table td:first-child{position:sticky;right:0;z-index:3;background:var(--panel3);width:1%;min-width:96px;max-width:260px;text-align:right;font-weight:800;color:var(--heading)}
 .fingerprint-table th:first-child{background:var(--panel2);z-index:4}
 .fingerprint-cell{position:relative;color:var(--text2)}
 .fingerprint-cell.bridge{box-shadow:inset 0 0 0 9999px var(--bridge-color)}
 .fingerprint-hit{display:inline-flex;align-items:center;justify-content:center;min-width:48px;padding:3px 8px;border-radius:999px;color:#fff;font-size:11px;font-weight:800;background:var(--hit-color)}
+.fingerprint-hit.issue{background:var(--red);min-width:92px}
 .empty{padding:44px 16px;text-align:center;color:var(--text3);background:var(--panel3);border:1px solid var(--border);border-radius:var(--radius);font-weight:800}
 @media (max-width:760px){
   .topbar{height:auto;align-items:flex-start;gap:14px;padding:16px;flex-direction:column}
@@ -63,13 +64,11 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--text);min
     <div class="brand-mark">HR</div>
     <div>
       <div class="brand-title">تقرير البصمة</div>
-      <div class="brand-sub">قراءة مباشرة من Firebase</div>
     </div>
   </div>
   <div class="top-actions">
     <span class="status" id="connectionStatus">جاري الاتصال</span>
     <a class="btn" href="index.html">الرجوع للنظام</a>
-    <a class="btn btn-primary" href="تطبيق البصمة/index.html">تطبيق البصمة</a>
   </div>
 </header>
 
@@ -120,7 +119,8 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 const colors = ['#2563eb','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#14b8a6','#f97316'];
-const state = {employees:[], punches:[], hrLoaded:false, punchesLoaded:false};
+const state = {employees:[], schedules:{}, punches:[], hrLoaded:false, punchesLoaded:false};
+const dateDayKeys = ['sun','mon','tue','wed','thu','fri','sat'];
 
 function setConnectionStatus(text,type=''){
   const el = document.getElementById('connectionStatus');
@@ -184,7 +184,14 @@ function normalizeEmployees(value){
   const list = Array.isArray(value) ? value : Object.values(value || {});
   return list
     .filter(emp=>emp && emp.id)
-    .map(emp=>({id:emp.id, name:emp.name || emp.empName || 'موظف', position:emp.position || '', employer:emp.employer || ''}))
+    .map(emp=>({
+      id:emp.id,
+      name:emp.name || emp.empName || 'موظف',
+      position:emp.position || '',
+      employer:emp.employer || '',
+      schedType:emp.schedType || '',
+      segments:Array.isArray(emp.segments) ? emp.segments : []
+    }))
     .sort((a,b)=>String(a.name).localeCompare(String(b.name),'ar'));
 }
 
@@ -245,7 +252,49 @@ function getTimeColumns(punches){
     .sort((a,b)=>timeToMin(a)-timeToMin(b));
 }
 
-function buildFingerprintTable(rows, columns){
+function getScheduleItemsForEmployee(empId, dateValue){
+  const date = parseDateInput(dateValue);
+  const dayKey = dateDayKeys[date.getDay()];
+  const schedule = state.schedules?.[dayKey] || {};
+  const scheduledItems = Object.values(schedule.zones || {})
+    .flatMap(items=>Array.isArray(items) ? items : [])
+    .filter(item=>item.empId === empId && item.from && item.to);
+  if(scheduledItems.length) return scheduledItems.sort((a,b)=>timeToMin(a.from)-timeToMin(b.from));
+  const emp = getEmployeesForReport().find(item=>item.id === empId);
+  if(emp?.schedType === 'fixed' && Array.isArray(emp.segments)){
+    return emp.segments.filter(item=>item.from && item.to).sort((a,b)=>timeToMin(a.from)-timeToMin(b.from));
+  }
+  return [];
+}
+
+function getScheduledWindow(empId, dateValue){
+  const items = getScheduleItemsForEmployee(empId,dateValue);
+  if(!items.length) return null;
+  return {
+    start:Math.min(...items.map(item=>timeToMin(item.from))),
+    end:Math.max(...items.map(item=>timeToMin(item.to)))
+  };
+}
+
+function getPunchIssueLabel(punch, row, sortedPunches){
+  if(!row.empId || !row.dateValue) return '';
+  const scheduleWindow = getScheduledWindow(row.empId,row.dateValue);
+  if(!scheduleWindow) return '';
+  const punchMinutes = punchTimeToMinutes(punch);
+  const firstPunch = sortedPunches[0];
+  const lastPunch = sortedPunches[sortedPunches.length - 1];
+  const isFirstPunch = punch === firstPunch;
+  const isLastPunch = punch === lastPunch && sortedPunches.length > 1;
+  if((punch.type === 'in' || !punch.type) && isFirstPunch && punchMinutes > scheduleWindow.start){
+    return `تأخير ${punchMinutes - scheduleWindow.start} دقائق`;
+  }
+  if((punch.type === 'out' || !punch.type) && isLastPunch && punchMinutes < scheduleWindow.end){
+    return `مغادرة مبكرة ${scheduleWindow.end - punchMinutes} دقائق`;
+  }
+  return '';
+}
+
+function buildFingerprintTable(rows, columns, firstHeader='اسم الموظف'){
   if(!columns.length) return '<div class="empty">لا توجد بصمات في الفترة المحددة</div>';
   const head = columns.map(time=>`<th>${formatTimeValue(time)}</th>`).join('');
   const body = rows.map(row=>{
@@ -268,12 +317,16 @@ function buildFingerprintTable(rows, columns){
       const hits = hitsByTime.get(time) || [];
       const isBridge = ranges.some(([start,end])=>idx >= start && idx <= end);
       const style = `--bridge-color:${hexToRgba(color,.16)};--hit-color:${color}`;
-      const content = hits.map(punch=>`<span class="fingerprint-hit" style="${style}">${formatTimeValue(getPunchTime(punch))}</span>`).join(' ');
+      const content = hits.map(punch=>{
+        const issueLabel = getPunchIssueLabel(punch,row,sortedPunches);
+        const label = issueLabel ? `${issueLabel} - ${formatTimeValue(getPunchTime(punch))}` : formatTimeValue(getPunchTime(punch));
+        return `<span class="fingerprint-hit ${issueLabel?'issue':''}" style="${style}">${label}</span>`;
+      }).join(' ');
       return `<td class="fingerprint-cell ${isBridge?'bridge':''}" style="${style}">${content}</td>`;
     }).join('');
     return `<tr><td>${escapeHtml(row.label)}</td>${cells}</tr>`;
   }).join('');
-  return `<div class="grid-wrap"><table class="fingerprint-table"><thead><tr><th></th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  return `<div class="grid-wrap"><table class="fingerprint-table"><thead><tr><th>${escapeHtml(firstHeader)}</th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function ensureControls(){
@@ -342,12 +395,14 @@ function renderReport(){
       return {
         key:dateValue,
         label:`${getArabicDayName(date)} ${date.toLocaleDateString('ar-KW')}`,
+        empId,
+        dateValue,
         color:colorForKey(empId || dateValue),
         punches:getPunchesForDate(dateValue,empId)
       };
     });
     subtitle.textContent = emp ? `${emp.name} من ${parseDateInput(fromValue).toLocaleDateString('ar-KW')} إلى ${parseDateInput(toValue).toLocaleDateString('ar-KW')}` : '';
-    view.innerHTML = buildFingerprintTable(rows,columns);
+    view.innerHTML = buildFingerprintTable(rows,columns,'اليوم');
     return;
   }
 
@@ -358,11 +413,13 @@ function renderReport(){
   const rows = employees.map(emp=>({
     key:emp.id,
     label:emp.name,
+    empId:emp.id,
+    dateValue,
     color:colorForKey(emp.id),
     punches:getPunchesForDate(dateValue,emp.id)
   }));
   subtitle.textContent = `${getArabicDayName(reportDate)} ${reportDate.toLocaleDateString('ar-KW')}`;
-  view.innerHTML = buildFingerprintTable(rows,columns);
+  view.innerHTML = buildFingerprintTable(rows,columns,'اسم الموظف');
 }
 
 function startFirebaseListeners(){
@@ -372,6 +429,7 @@ function startFirebaseListeners(){
   db.ref('hrData').on('value', snap=>{
     const value = snap.val() || {};
     state.employees = normalizeEmployees(value.employees);
+    state.schedules = value.schedules || {};
     state.hrLoaded = true;
     renderReport();
   }, err=>{
