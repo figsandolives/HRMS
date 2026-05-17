@@ -45,8 +45,9 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--text);min
 .fingerprint-table th:first-child{background:var(--panel2);z-index:4}
 .fingerprint-cell{position:relative;color:var(--text2)}
 .fingerprint-cell.bridge{box-shadow:inset 0 0 0 9999px var(--bridge-color)}
-.fingerprint-hit{display:inline-flex;align-items:center;justify-content:center;min-width:48px;padding:3px 8px;border-radius:999px;color:#fff;font-size:11px;font-weight:800;background:var(--hit-color)}
-.fingerprint-hit.issue{background:var(--red);min-width:92px}
+.fingerprint-hit{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:48px;min-height:34px;padding:5px 9px;border-radius:12px;color:#fff;font-size:11px;font-weight:800;line-height:1.25;background:var(--hit-color)}
+.fingerprint-hit.issue{background:var(--red);min-width:150px}
+.fingerprint-hit-branch{font-size:10px;font-weight:700;opacity:.9}
 .empty{padding:44px 16px;text-align:center;color:var(--text3);background:var(--panel3);border:1px solid var(--border);border-radius:var(--radius);font-weight:800}
 @media (max-width:760px){
   .topbar{height:auto;align-items:flex-start;gap:14px;padding:16px;flex-direction:column}
@@ -91,13 +92,6 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--text);min
       </div>
     </div>
 
-    <div class="stats">
-      <div class="stat"><div class="stat-label">الموظفون</div><div class="stat-value" id="employeesCount">0</div></div>
-      <div class="stat"><div class="stat-label">بصمات اليوم</div><div class="stat-value" id="todayPunchesCount">0</div></div>
-      <div class="stat"><div class="stat-label">أول بصمة</div><div class="stat-value" id="firstPunch">-</div></div>
-      <div class="stat"><div class="stat-label">آخر بصمة</div><div class="stat-value" id="lastPunch">-</div></div>
-    </div>
-
     <div id="reportView" class="empty">جاري تحميل بيانات البصمة...</div>
   </section>
 </main>
@@ -121,6 +115,11 @@ const db = firebase.database();
 const colors = ['#2563eb','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#14b8a6','#f97316'];
 const state = {employees:[], schedules:{}, punches:[], hrLoaded:false, punchesLoaded:false};
 const dateDayKeys = ['sun','mon','tue','wed','thu','fri','sat'];
+const branchNames = {
+  surra:'السرة',
+  abulhasania:'ابو الحصانية',
+  yarmouk:'اليرموك'
+};
 
 function setConnectionStatus(text,type=''){
   const el = document.getElementById('connectionStatus');
@@ -252,17 +251,36 @@ function getTimeColumns(punches){
     .sort((a,b)=>timeToMin(a)-timeToMin(b));
 }
 
+function normalizeBranchName(value){
+  const text = String(value || '').trim();
+  if(!text) return '';
+  if(/السرة|surra/i.test(text)) return 'السرة';
+  if(/أبو الحصانية|ابو الحصانية|hasaniya|hasania/i.test(text)) return 'ابو الحصانية';
+  if(/اليرموك|yarmouk/i.test(text)) return 'اليرموك';
+  return text.replace(/^فرع\s+/,'');
+}
+
 function getScheduleItemsForEmployee(empId, dateValue){
   const date = parseDateInput(dateValue);
   const dayKey = dateDayKeys[date.getDay()];
   const schedule = state.schedules?.[dayKey] || {};
-  const scheduledItems = Object.values(schedule.zones || {})
-    .flatMap(items=>Array.isArray(items) ? items : [])
+  const scheduledItems = Object.entries(schedule.zones || {})
+    .flatMap(([zone,items])=>(Array.isArray(items) ? items : []).map(item=>({
+      ...item,
+      zone,
+      branchName:branchNames[zone] || normalizeBranchName(item.employerName || item.employer || item.branchName)
+    })))
     .filter(item=>item.empId === empId && item.from && item.to);
   if(scheduledItems.length) return scheduledItems.sort((a,b)=>timeToMin(a.from)-timeToMin(b.from));
   const emp = getEmployeesForReport().find(item=>item.id === empId);
   if(emp?.schedType === 'fixed' && Array.isArray(emp.segments)){
-    return emp.segments.filter(item=>item.from && item.to).sort((a,b)=>timeToMin(a.from)-timeToMin(b.from));
+    return emp.segments
+      .filter(item=>item.from && item.to)
+      .map(item=>({
+        ...item,
+        branchName:normalizeBranchName(item.employerName || item.employer || emp.employer)
+      }))
+      .sort((a,b)=>timeToMin(a.from)-timeToMin(b.from));
   }
   return [];
 }
@@ -294,6 +312,27 @@ function getPunchIssueLabel(punch, row, sortedPunches){
   return '';
 }
 
+function getPunchTypeLabel(punch, sortedPunches){
+  if(punch.type === 'out') return 'بصمة خروج';
+  if(punch.type === 'in') return 'بصمة دخول';
+  const index = sortedPunches.indexOf(punch);
+  return index % 2 === 0 ? 'بصمة دخول' : 'بصمة خروج';
+}
+
+function getPunchBranchName(punch, row, sortedPunches){
+  if(!row.empId || !row.dateValue) return '';
+  const items = getScheduleItemsForEmployee(row.empId,row.dateValue);
+  if(!items.length) return '';
+  const punchMinutes = punchTimeToMinutes(punch);
+  const direct = items.find(item=>punchMinutes >= timeToMin(item.from) && punchMinutes <= timeToMin(item.to));
+  if(direct?.branchName) return direct.branchName;
+  const index = sortedPunches.indexOf(punch);
+  const typeLabel = getPunchTypeLabel(punch,sortedPunches);
+  if(typeLabel === 'بصمة دخول') return items[0]?.branchName || '';
+  if(typeLabel === 'بصمة خروج') return items[items.length - 1]?.branchName || '';
+  return items[Math.min(index,items.length - 1)]?.branchName || '';
+}
+
 function buildFingerprintTable(rows, columns, firstHeader='اسم الموظف'){
   if(!columns.length) return '<div class="empty">لا توجد بصمات في الفترة المحددة</div>';
   const head = columns.map(time=>`<th>${formatTimeValue(time)}</th>`).join('');
@@ -319,8 +358,11 @@ function buildFingerprintTable(rows, columns, firstHeader='اسم الموظف')
       const style = `--bridge-color:${hexToRgba(color,.16)};--hit-color:${color}`;
       const content = hits.map(punch=>{
         const issueLabel = getPunchIssueLabel(punch,row,sortedPunches);
-        const label = issueLabel ? `${issueLabel} - ${formatTimeValue(getPunchTime(punch))}` : formatTimeValue(getPunchTime(punch));
-        return `<span class="fingerprint-hit ${issueLabel?'issue':''}" style="${style}">${label}</span>`;
+        const punchTime = formatTimeValue(getPunchTime(punch));
+        const typeLabel = getPunchTypeLabel(punch,sortedPunches);
+        const branchName = getPunchBranchName(punch,row,sortedPunches);
+        const label = issueLabel ? `${typeLabel} ${punchTime} - ${issueLabel}` : `${typeLabel} ${punchTime}`;
+        return `<span class="fingerprint-hit ${issueLabel?'issue':''}" style="${style}"><span>${label}</span>${branchName?`<span class="fingerprint-hit-branch">${escapeHtml(branchName)}</span>`:''}</span>`;
       }).join(' ');
       return `<td class="fingerprint-cell ${isBridge?'bridge':''}" style="${style}">${content}</td>`;
     }).join('');
@@ -347,6 +389,7 @@ function ensureControls(){
 }
 
 function updateStats(){
+  if(!document.getElementById('employeesCount')) return;
   const today = formatDateInput(new Date());
   const todayPunches = getPunchesForDate(today);
   document.getElementById('employeesCount').textContent = getEmployeesForReport().length;
@@ -359,7 +402,6 @@ function renderReport(){
   const view = document.getElementById('reportView');
   const subtitle = document.getElementById('reportSubtitle');
   ensureControls();
-  updateStats();
   if(!state.hrLoaded || !state.punchesLoaded){
     view.innerHTML = '<div class="empty">جاري تحميل بيانات البصمة...</div>';
     return;

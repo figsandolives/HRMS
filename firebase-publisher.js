@@ -49,7 +49,7 @@
     return databasePromise;
   }
 
-  window.publishHrmsApprovedSchedule = async function(payload){
+  async function publishApprovedSchedule(payload){
     const db = await getDatabase();
     const publishedAt = new Date().toISOString();
     const dayKey = payload?.dayKey || '';
@@ -67,5 +67,63 @@
     });
     if(dayKey) await db.ref(`hrData/schedules/${dayKey}`).set(schedule);
     return publishedAt;
+  }
+
+  async function publishFingerprintPlaceSession(sessionId, payload){
+    if(!sessionId) throw new Error('sessionId is required');
+    const db = await getDatabase();
+    await db.ref(`fingerprintPlaceSessions/${sessionId}`).set({
+      ...payload,
+      sessionId,
+      connectedAt:firebase.database.ServerValue.TIMESTAMP,
+      updatedAt:new Date().toISOString()
+    });
+  }
+
+  async function watchFingerprintPlaceSession(sessionId, callback){
+    const db = await getDatabase();
+    const ref = db.ref(`fingerprintPlaceSessions/${sessionId}`);
+    const handler = snap=>callback(snap.val());
+    ref.on('value', handler);
+    return ()=>ref.off('value', handler);
+  }
+
+  async function watchFingerprintPlaces(callback){
+    const db = await getDatabase();
+    const ref = db.ref('hrData/fingerprintPlaces');
+    const handler = snap=>callback(snap.val() || {});
+    ref.on('value', handler);
+    return ()=>ref.off('value', handler);
+  }
+
+  async function saveFingerprintPlace(place, sessionId=''){
+    const db = await getDatabase();
+    const id = place?.id || db.ref('hrData/fingerprintPlaces').push().key;
+    const savedAt = new Date().toISOString();
+    await db.ref(`hrData/fingerprintPlaces/${id}`).set({
+      ...place,
+      id,
+      savedAt,
+      updatedAt:savedAt
+    });
+    if(sessionId) await db.ref(`fingerprintPlaceSessions/${sessionId}`).remove();
+    return id;
+  }
+
+  async function deleteFingerprintPlace(id){
+    if(!id) return;
+    const db = await getDatabase();
+    await db.ref(`hrData/fingerprintPlaces/${id}`).remove();
+  }
+
+  window.hrmsFirebase = {
+    getDatabase,
+    publishApprovedSchedule,
+    publishFingerprintPlaceSession,
+    watchFingerprintPlaceSession,
+    watchFingerprintPlaces,
+    saveFingerprintPlace,
+    deleteFingerprintPlace
   };
+  window.publishHrmsApprovedSchedule = publishApprovedSchedule;
 })();

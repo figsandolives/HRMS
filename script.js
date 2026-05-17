@@ -53,6 +53,7 @@ function ensureAppDataShape(){
   if(!appData.reminders) appData.reminders = [];
   if(!appData.fingerprintCodes) appData.fingerprintCodes = {};
   if(!appData.fingerprintPunches) appData.fingerprintPunches = [];
+  if(!appData.fingerprintPlaces) appData.fingerprintPlaces = {};
 }
 ensureAppDataShape();
 
@@ -76,10 +77,11 @@ let folderSyncTimer = null;
 let folderSyncRunning = false;
 let folderSyncPending = false;
 let firebasePublisherScriptPromise = null;
-let employerMap = null;
-let employerMarker = null;
-let employerCircle = null;
-let employerCircleDragging = false;
+let fingerprintPlaceSessionId = null;
+let fingerprintPlaceSessionUnsubscribe = null;
+let fingerprintPlacesUnsubscribe = null;
+let pendingFingerprintPlaceDevice = null;
+let fingerprintPlacesCache = {};
 
 function saveData(options={}){
   ensureAppDataShape();
@@ -106,6 +108,7 @@ function buildEmptyHrData(settings={}){
     reminders:[],
     fingerprintCodes:{},
     fingerprintPunches:[],
+    fingerprintPlaces:{},
     books:{general:[], deduct:[], warn:[], notice:[]},
     decisions:[],
     schedulePdfHistory:{}
@@ -197,8 +200,7 @@ function getFirebaseEmployersPayload(){
     payload[employer.id] = {
       id:employer.id,
       name:employer.name || '',
-      location:employer.location || null,
-      zoneRadius:Number(employer.zoneRadius) || 150,
+      branches:normalizeEmployerBranches(employer),
       createdAt:employer.createdAt || '',
       updatedAt:employer.updatedAt || ''
     };
@@ -228,7 +230,7 @@ function loadExternalScript(src){
 }
 
 async function loadFirebasePublisher(){
-  if(window.publishHrmsApprovedSchedule) return;
+  if(window.publishHrmsApprovedSchedule && window.hrmsFirebase) return;
   if(!firebasePublisherScriptPromise){
     firebasePublisherScriptPromise = loadExternalScript('firebase-publisher.js');
   }
@@ -251,6 +253,282 @@ async function publishApprovedScheduleToFirebase(dayKey, schedule){
   });
 }
 
+function getFingerprintPlaceSessionId(){
+  if(!fingerprintPlaceSessionId){
+    fingerprintPlaceSessionId = `fp-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+  }
+  return fingerprintPlaceSessionId;
+}
+
+function getFingerprintPlaceLink(){
+  return `https://figsandolives.github.io/HRMS/index.html?fingerprintPlaceSession=${encodeURIComponent(getFingerprintPlaceSessionId())}`;
+}
+
+async function openFingerprintPlacesPage(){
+  showLoading('جاري فتح أماكن البصمة...');
+  navTo('fingerprintPlaces');
+  try{
+    await setupFingerprintPlacesPage();
+  } catch(err){
+    console.error(err);
+    showToast('تعذر فتح أماكن البصمة','error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function setupFingerprintPlacesPage(){
+  const linkInput = document.getElementById('fingerprintPlaceLink');
+  if(linkInput) linkInput.value = getFingerprintPlaceLink();
+  renderFingerprintPlaceEmployerChoices();
+  renderFingerprintPlacesList();
+  await loadFirebasePublisher();
+  if(fingerprintPlaceSessionUnsubscribe) fingerprintPlaceSessionUnsubscribe();
+  if(fingerprintPlacesUnsubscribe) fingerprintPlacesUnsubscribe();
+  fingerprintPlaceSessionUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaceSession(getFingerprintPlaceSessionId(), data=>{
+    pendingFingerprintPlaceDevice = data || null;
+    renderFingerprintPlaceDevice(data);
+  });
+  fingerprintPlacesUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaces(data=>{
+    fingerprintPlacesCache = data || {};
+    renderFingerprintPlacesList();
+  });
+}
+
+function copyFingerprintPlaceLink(){
+  const link = getFingerprintPlaceLink();
+  navigator.clipboard?.writeText(link).then(()=>{
+    showToast('تم نسخ رابط مكان البصمة');
+  }).catch(()=>{
+    const input = document.getElementById('fingerprintPlaceLink');
+    input?.select();
+    showToast('انسخ الرابط من الخانة');
+  });
+}
+
+function renderFingerprintPlaceEmployerChoices(){
+  const container = document.getElementById('fingerprintPlaceEmployerChoices');
+  if(!container) return;
+  if(!appData.employers.length){
+    container.innerHTML = '<div class="setting-sub">أضف جهة عمل أولاً.</div>';
+    return;
+  }
+  container.innerHTML = appData.employers.map(employer=>`
+    <label class="branch-choice">
+      <input type="checkbox" value="${employer.id}">
+      <span>
+        ${escapeHtml(employer.name)}
+        <small>${normalizeEmployerBranches(employer).map(getBranchLabel).join('، ') || 'بدون فرع محدد'}</small>
+      </span>
+    </label>
+  `).join('');
+}
+
+function getSelectedFingerprintPlaceEmployers(){
+  const ids = [...document.querySelectorAll('#fingerprintPlaceEmployerChoices input:checked')].map(input=>input.value);
+  return ids.map(id=>getEmployerByIdOrName(id)).filter(Boolean);
+}
+
+function renderFingerprintPlaceDevice(data){
+  const card = document.getElementById('fingerprintPlaceDeviceCard');
+  const title = document.getElementById('fingerprintDeviceTitle');
+  const details = document.getElementById('fingerprintDeviceDetails');
+  const panel = document.getElementById('fingerprintBindPanel');
+  if(!card || !title || !details || !panel) return;
+  if(!data?.location){
+    card.className = 'fingerprint-device-card waiting';
+    title.textContent = 'بانتظار اتصال جهاز كمبيوتر';
+    details.textContent = 'افتح الرابط أعلاه من الجهاز الموجود في مكان البصمة.';
+    panel.style.display = 'none';
+    return;
+  }
+  card.className = 'fingerprint-device-card connected';
+  title.textContent = 'تم اتصال جهاز كمبيوتر من رابط مكان البصمة';
+  details.innerHTML = formatFingerprintDeviceDetails(data);
+  panel.style.display = 'block';
+}
+
+function formatFingerprintDeviceDetails(data){
+  const loc = data.location || {};
+  const device = data.device || {};
+  const rows = [
+    `خط العرض: ${Number(loc.lat).toFixed(7)}`,
+    `خط الطول: ${Number(loc.lng).toFixed(7)}`,
+    `دقة الموقع: ${Math.round(Number(loc.accuracy) || 0)} متر`,
+    loc.altitude != null ? `الارتفاع: ${Math.round(Number(loc.altitude))} متر` : 'الارتفاع: غير متاح من المتصفح',
+    loc.altitudeAccuracy != null ? `دقة الارتفاع: ${Math.round(Number(loc.altitudeAccuracy))} متر` : '',
+    `النظام: ${escapeHtml(device.platform || 'غير معروف')}`,
+    `اللغة: ${escapeHtml(device.language || '')}`,
+    `المنطقة الزمنية: ${escapeHtml(device.timeZone || '')}`,
+    `الشاشة: ${escapeHtml(device.screen || '')}`,
+    `المتصفح: ${escapeHtml(device.userAgent || '')}`
+  ].filter(Boolean);
+  return `<div class="fingerprint-place-meta">${rows.join('<br>')}</div>`;
+}
+
+function renderFingerprintPlacesList(){
+  const list = document.getElementById('fingerprintPlacesList');
+  if(!list) return;
+  const places = Object.values(fingerprintPlacesCache || {});
+  if(!places.length){
+    list.innerHTML = '<div class="empty-state"><p>لا توجد أماكن بصمة محفوظة بعد</p></div>';
+    return;
+  }
+  list.innerHTML = places.map(place=>{
+    const loc = place.location || {};
+    const employerNames = Array.isArray(place.employerNames) ? place.employerNames.join('، ') : '';
+    const meta = [
+      `جهة العمل: ${escapeHtml(employerNames || 'غير محددة')}`,
+      `الحدود: ${Number(place.radiusMeters) || 0} متر`,
+      Number.isFinite(Number(loc.lat)) && Number.isFinite(Number(loc.lng)) ? `الإحداثيات: ${Number(loc.lat).toFixed(7)}, ${Number(loc.lng).toFixed(7)}` : '',
+      loc.altitude != null ? `الارتفاع: ${Math.round(Number(loc.altitude))} متر` : '',
+      loc.accuracy != null ? `الدقة: ${Math.round(Number(loc.accuracy))} متر` : ''
+    ].filter(Boolean).join('<br>');
+    return `
+      <div class="fingerprint-place-item">
+        <div>
+          <div class="setting-label">مكان بصمة محفوظ</div>
+          <div class="fingerprint-place-meta">${meta}</div>
+        </div>
+        <button class="btn btn-danger btn-sm" onclick="deleteFingerprintPlace('${place.id}')">حذف</button>
+      </div>
+    `;
+  }).join('');
+}
+
+async function saveFingerprintPlace(){
+  if(!pendingFingerprintPlaceDevice?.location){
+    showToast('افتح الرابط من جهاز الكمبيوتر أولاً','error');
+    return;
+  }
+  const radius = Number(normalizeDigits(document.getElementById('fingerprintPlaceRadius')?.value || ''));
+  const employers = getSelectedFingerprintPlaceEmployers();
+  if(!Number.isFinite(radius) || radius <= 0){
+    showToast('أدخل حدود البصمة بالمتر','error');
+    return;
+  }
+  if(!employers.length){
+    showToast('اختر جهة عمل واحدة على الأقل','error');
+    return;
+  }
+  showLoading('جاري حفظ مكان البصمة...');
+  try{
+    await loadFirebasePublisher();
+    const location = pendingFingerprintPlaceDevice.location || {};
+    await window.hrmsFirebase.saveFingerprintPlace({
+      location:{
+        lat:Number(location.lat),
+        lng:Number(location.lng),
+        accuracy:Number(location.accuracy) || null,
+        altitude:location.altitude ?? null,
+        altitudeAccuracy:location.altitudeAccuracy ?? null,
+        capturedAt:pendingFingerprintPlaceDevice.updatedAt || new Date().toISOString()
+      },
+      radiusMeters:radius,
+      employerIds:employers.map(employer=>employer.id),
+      employerNames:employers.map(employer=>employer.name),
+      createdAt:new Date().toISOString()
+    }, getFingerprintPlaceSessionId());
+    pendingFingerprintPlaceDevice = null;
+    fingerprintPlaceSessionId = null;
+    document.getElementById('fingerprintPlaceRadius').value = '20';
+    showToast('تم حفظ مكان البصمة بنجاح');
+    await setupFingerprintPlacesPage();
+  } catch(err){
+    console.error(err);
+    showToast('تعذر حفظ مكان البصمة','error');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function deleteFingerprintPlace(id){
+  if(!confirm('حذف مكان البصمة؟')) return;
+  showLoading('جاري حذف مكان البصمة...');
+  try{
+    await loadFirebasePublisher();
+    await window.hrmsFirebase.deleteFingerprintPlace(id);
+    showToast('تم حذف مكان البصمة');
+  } catch(err){
+    console.error(err);
+    showToast('تعذر حذف مكان البصمة','error');
+  } finally {
+    hideLoading();
+  }
+}
+
+function getRegistrationDeviceInfo(){
+  const screenInfo = window.screen ? `${window.screen.width}x${window.screen.height} / ${window.devicePixelRatio || 1}x` : '';
+  return {
+    userAgent:navigator.userAgent || '',
+    platform:navigator.platform || '',
+    language:navigator.language || '',
+    languages:Array.from(navigator.languages || []),
+    timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+    screen:screenInfo,
+    online:navigator.onLine,
+    connection:navigator.connection ? {
+      effectiveType:navigator.connection.effectiveType || '',
+      downlink:navigator.connection.downlink || null,
+      rtt:navigator.connection.rtt || null
+    } : null
+  };
+}
+
+function getDetailedDeviceLocation(){
+  return new Promise((resolve,reject)=>{
+    if(!navigator.geolocation){
+      reject(new Error('الموقع غير مدعوم في هذا الجهاز'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(pos=>{
+      resolve({
+        lat:pos.coords.latitude,
+        lng:pos.coords.longitude,
+        accuracy:pos.coords.accuracy,
+        altitude:pos.coords.altitude,
+        altitudeAccuracy:pos.coords.altitudeAccuracy,
+        heading:pos.coords.heading,
+        speed:pos.coords.speed,
+        capturedAt:new Date(pos.timestamp).toISOString()
+      });
+    },()=>reject(new Error('اسمح للمتصفح بالوصول إلى الموقع')),{
+      enableHighAccuracy:true,
+      timeout:20000,
+      maximumAge:0
+    });
+  });
+}
+
+async function initFingerprintPlaceClient(sessionId){
+  applyTheme(appData.settings?.theme || 'light');
+  document.body.innerHTML = `
+    <section class="screen" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:22px;background:var(--bg);direction:rtl">
+      <div class="card" style="max-width:520px;width:100%;text-align:center">
+        <div class="spinner" style="margin:0 auto 18px"></div>
+        <div class="section-title" id="placeClientTitle" style="margin:0 0 8px">جاري ربط مكان البصمة</div>
+        <div class="setting-sub" id="placeClientText">اسمح للمتصفح بالوصول إلى الموقع من هذا الكمبيوتر.</div>
+      </div>
+    </section>
+  `;
+  try{
+    await loadFirebasePublisher();
+    const location = await getDetailedDeviceLocation();
+    await window.hrmsFirebase.publishFingerprintPlaceSession(sessionId,{
+      status:'connected',
+      location,
+      device:getRegistrationDeviceInfo(),
+      pageUrl:window.location.href
+    });
+    document.getElementById('placeClientTitle').textContent = 'تم إرسال موقع الجهاز';
+    document.getElementById('placeClientText').textContent = 'ارجع إلى صفحة أماكن البصمة في النظام لاختيار جهة العمل وحدود البصمة ثم الحفظ.';
+  } catch(err){
+    console.error(err);
+    document.getElementById('placeClientTitle').textContent = 'تعذر ربط مكان البصمة';
+    document.getElementById('placeClientText').textContent = err.message || 'تحقق من اتصال الإنترنت والسماح بالموقع.';
+  }
+}
+
 function normalizeImportedHrData(source){
   const data = source?.data || source || {};
   const normalized = {...data};
@@ -261,6 +539,7 @@ function normalizeImportedHrData(source){
   normalized.reminders = Array.isArray(data.reminders) ? data.reminders : Object.values(data.reminders || {});
   normalized.fingerprintCodes = data.fingerprintCodes || {};
   normalized.fingerprintPunches = Array.isArray(data.fingerprintPunches) ? data.fingerprintPunches : Object.entries(data.fingerprintPunches || {}).map(([id,punch])=>({id,...punch}));
+  normalized.fingerprintPlaces = data.fingerprintPlaces || {};
   return normalized;
 }
 
@@ -1066,6 +1345,12 @@ const scheduleBranchNames = {
   yarmouk:'فرع اليرموك'
 };
 
+const scheduleBranchOptions = [
+  {key:'surra', label:'السرة', aliases:['السرة','surra']},
+  {key:'abulhasania', label:'أبو الحصانية', aliases:['أبو الحصانية','ابو الحصانية','abulhasania','hasania']},
+  {key:'yarmouk', label:'اليرموك', aliases:['اليرموك','yarmouk']}
+];
+
 const scheduleBranchNamesEn = {
   surra:'Surra Branch',
   abulhasania:'Abu Al Hasaniya Branch',
@@ -1760,7 +2045,7 @@ async function syncDataToFolder(userTriggered=false){
 // ===== LOGIN =====
 document.addEventListener('keydown', e => {
   const ls = document.getElementById('loginScreen');
-  if(ls.classList.contains('hidden')) return;
+  if(!ls || ls.classList.contains('hidden')) return;
   if(e.key >= '0' && e.key <= '9' && pinValue.length < 4){
     pinValue += e.key; updatePinDisplay();
   } else if(e.key === 'Backspace'){
@@ -1882,7 +2167,7 @@ function navTo(page, el){
     fingerprint:'تقرير البصمة',reminders:'التذكيرات',notifications:'الإشعارات',
     bookGeneral:'الكتاب العام',bookDeduct:'كتاب الخصم',bookWarn:'كتاب التنبيه',
     bookNotice:'كتاب لفت النظر',decisions:'القرارات والتعميمات',employers:'جهات العمل',addEmployer:'إضافة جهة عمل',
-    settings:'الإعدادات',fingerprintCodes:'رموز دخول البصمة',profile:'ملف الموظف'
+    settings:'الإعدادات',fingerprintCodes:'رموز دخول البصمة',fingerprintPlaces:'أماكن البصمة',profile:'ملف الموظف'
   };
   document.getElementById('topbarTitle').textContent = titles[page]||'';
   document.getElementById('topbarBack').style.display = (page==='profile') ? 'flex' : 'none';
@@ -1893,6 +2178,7 @@ function navTo(page, el){
   }
   if(page==='settings') updateThemeToggle();
   if(page==='fingerprintCodes') renderFingerprintCodes();
+  if(page==='addEmployer') renderEmployerBranchChoices([]);
   if(page==='employers') renderEmployersList();
   if(page==='reminders') renderReminders();
 }
@@ -2302,20 +2588,34 @@ function updateReminderBadge(){
 const var_green = 'var(--green)';
 
 // ===== EMPLOYERS =====
-const DEFAULT_EMPLOYER_LOCATION = {lat:29.3075520,lng:47.9741215};
-
-function parseEmployerCoordinates(value){
-  const parts = normalizeDigits(value).match(/-?\d+(?:\.\d+)?/g);
-  if(!parts || parts.length < 2) return null;
-  const lat = Number(parts[0]);
-  const lng = Number(parts[1]);
-  if(!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat)>90 || Math.abs(lng)>180) return null;
-  return {lat,lng};
+function getBranchLabel(branchKey){
+  return scheduleBranchOptions.find(branch=>branch.key === branchKey)?.label || branchKey;
 }
 
-function formatEmployerCoordinates(location){
-  const loc = location || DEFAULT_EMPLOYER_LOCATION;
-  return `(${Number(loc.lat).toFixed(7)}, ${Number(loc.lng).toFixed(7)})`;
+function normalizeEmployerBranches(employer){
+  if(Array.isArray(employer?.branches) && employer.branches.length) return employer.branches;
+  const name = String(employer?.name || '').toLowerCase();
+  const matches = scheduleBranchOptions.filter(branch=>{
+    const aliases = branch.aliases || [branch.label, branch.key];
+    return aliases.some(alias=>name.includes(String(alias).toLowerCase()));
+  }).map(branch=>branch.key);
+  return matches;
+}
+
+function renderEmployerBranchChoices(selected=[]){
+  const container = document.getElementById('employerBranchChoices');
+  if(!container) return;
+  const selectedSet = new Set(selected);
+  container.innerHTML = scheduleBranchOptions.map(branch=>`
+    <label class="branch-choice">
+      <input type="checkbox" value="${branch.key}" ${selectedSet.has(branch.key) ? 'checked' : ''}>
+      <span>${branch.label}</span>
+    </label>
+  `).join('');
+}
+
+function getSelectedEmployerBranches(){
+  return [...document.querySelectorAll('#employerBranchChoices input:checked')].map(input=>input.value);
 }
 
 function renderEmployersList(){
@@ -2330,7 +2630,7 @@ function renderEmployersList(){
     <div class="setting-row">
       <div>
         <div class="setting-label">${emp.name}</div>
-        <div class="setting-sub">${emp.location ? `${formatEmployerCoordinates(emp.location)} - زون ${emp.zoneRadius || 150} متر` : 'لم يتم تحديد الموقع'} | أضيفت في ${new Date(emp.createdAt).toLocaleDateString('ar')}</div>
+        <div class="setting-sub">الفروع: ${(normalizeEmployerBranches(emp).map(getBranchLabel).join('، ') || 'غير محدد')} | أضيفت في ${new Date(emp.createdAt).toLocaleDateString('ar')}</div>
       </div>
       <div style="display:flex;gap:8px">
         <button class="btn btn-secondary btn-sm" onclick="openAddEmployerModal('${emp.id}')">تعديل</button>
@@ -2376,108 +2676,21 @@ function openAddEmployerModal(id=null){
   setTimeout(()=>{
     document.getElementById('topbarTitle').textContent = employer ? 'تعديل جهة عمل' : 'إضافة جهة عمل';
     document.getElementById('employerPageName').value = employer?.name || '';
-    document.getElementById('employerCoordinates').value = formatEmployerCoordinates(employer?.location || DEFAULT_EMPLOYER_LOCATION);
-    document.getElementById('employerZoneRadius').value = employer?.zoneRadius || 150;
-    updateEmployerZoneRadiusLabel(employer?.zoneRadius || 150);
-    initEmployerMap(employer?.location || DEFAULT_EMPLOYER_LOCATION, employer?.zoneRadius || 150);
+    renderEmployerBranchChoices(normalizeEmployerBranches(employer));
   },50);
-}
-
-function updateEmployerZoneRadiusLabel(value){
-  const label = document.getElementById('employerZoneRadiusLabel');
-  if(label) label.textContent = `${Math.round(Number(value)||150)} متر`;
-}
-
-function initEmployerMap(location=DEFAULT_EMPLOYER_LOCATION, radius=150){
-  if(!window.L){
-    showToast('تعذر تحميل الخريطة','error');
-    return;
-  }
-  const mapEl = document.getElementById('employerMap');
-  if(!mapEl) return;
-  if(!employerMap){
-    employerMap = L.map('employerMap',{scrollWheelZoom:true}).setView([location.lat,location.lng],17);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-      maxZoom:20,
-      attribution:'&copy; OpenStreetMap'
-    }).addTo(employerMap);
-    employerMap.on('click', e=>setEmployerZoneCenter(e.latlng.lat,e.latlng.lng,true));
-    employerMap.on('mousemove', e=>{
-      if(employerCircleDragging) setEmployerZoneCenter(e.latlng.lat,e.latlng.lng,true);
-    });
-    employerMap.on('mouseup', stopEmployerCircleDrag);
-    employerMap.on('mouseout', stopEmployerCircleDrag);
-  }
-  employerMap.invalidateSize();
-  employerMap.setView([location.lat,location.lng],17);
-  if(employerMarker) employerMarker.remove();
-  if(employerCircle) employerCircle.remove();
-  employerMarker = L.marker([location.lat,location.lng],{draggable:true}).addTo(employerMap);
-  employerMarker.on('dragend', e=>{
-    const pos = e.target.getLatLng();
-    setEmployerZoneCenter(pos.lat,pos.lng,true);
-  });
-  employerCircle = L.circle([location.lat,location.lng],{
-    radius:Number(radius)||150,
-    color:'#2563eb',
-    weight:2,
-    fillColor:'#2563eb',
-    fillOpacity:.16
-  }).addTo(employerMap);
-  employerCircle.on('mousedown', e=>{
-    employerCircleDragging = true;
-    employerMap.dragging.disable();
-    L.DomEvent.stop(e);
-  });
-  setEmployerZoneCenter(location.lat,location.lng,true);
-}
-
-function stopEmployerCircleDrag(){
-  if(!employerCircleDragging) return;
-  employerCircleDragging = false;
-  if(employerMap) employerMap.dragging.enable();
-}
-
-function setEmployerZoneCenter(lat,lng,updateInput=false){
-  const location = {lat:Number(lat),lng:Number(lng)};
-  if(employerMarker) employerMarker.setLatLng([location.lat,location.lng]);
-  if(employerCircle) employerCircle.setLatLng([location.lat,location.lng]);
-  if(employerMap) employerMap.panTo([location.lat,location.lng],{animate:false});
-  if(updateInput){
-    const input = document.getElementById('employerCoordinates');
-    if(input) input.value = formatEmployerCoordinates(location);
-  }
-}
-
-function updateEmployerMapFromInput(){
-  const input = document.getElementById('employerCoordinates');
-  const location = parseEmployerCoordinates(input?.value || '');
-  if(!location){
-    showToast('صيغة الإحداثيات غير صحيحة','error');
-    return;
-  }
-  setEmployerZoneCenter(location.lat,location.lng,false);
-  if(employerMap) employerMap.setView([location.lat,location.lng],17);
-  input.value = formatEmployerCoordinates(location);
-}
-
-function updateEmployerZoneRadius(value){
-  const radius = Number(value) || 150;
-  updateEmployerZoneRadiusLabel(radius);
-  if(employerCircle) employerCircle.setRadius(radius);
 }
 
 function saveEmployer(){
   const name = document.getElementById('employerPageName').value.trim();
-  const location = parseEmployerCoordinates(document.getElementById('employerCoordinates').value);
-  const zoneRadius = Number(document.getElementById('employerZoneRadius').value) || 150;
+  const branches = getSelectedEmployerBranches();
   if(!name){ showToast('أدخل اسم جهة العمل','error'); return; }
-  if(!location){ showToast('أدخل إحداثيات صحيحة','error'); return; }
+  if(!branches.length){ showToast('اختر فرعاً واحداً على الأقل','error'); return; }
   if(editingEmployerId){
     const idx = appData.employers.findIndex(item=>item.id === editingEmployerId);
     if(idx >= 0){
       const oldName = appData.employers[idx].name;
-      appData.employers[idx] = {...appData.employers[idx],name,location,zoneRadius,updatedAt:new Date().toISOString()};
+      const {location,zoneRadius,...cleanEmployer} = appData.employers[idx];
+      appData.employers[idx] = {...cleanEmployer,name,branches,updatedAt:new Date().toISOString()};
       appData.employees.forEach(emp=>{
         if(emp.employer === oldName){
           emp.employer = name;
@@ -2486,7 +2699,7 @@ function saveEmployer(){
       });
     }
   } else {
-    appData.employers.push({id:generateId(),name,location,zoneRadius,createdAt:new Date().toISOString()});
+    appData.employers.push({id:generateId(),name,branches,createdAt:new Date().toISOString()});
   }
   saveData();
   renderEmployersList();
@@ -2566,55 +2779,7 @@ function formatScheduleCardDate(date){
   return `${toArabicDigits(date.getDate())} / ${toArabicDigits(date.getMonth()+1)}`;
 }
 
-const scheduleBranchEmployerHints = {
-  surra:['السرة','surra'],
-  abulhasania:['أبو الحصانية','ابو الحصانية','hasaniya','hasania'],
-  yarmouk:['اليرموك','yarmouk']
-};
-
-function ensureScheduleBranchEmployers(){
-  if(!appData.settings.scheduleBranchEmployers) appData.settings.scheduleBranchEmployers = {};
-  Object.entries(scheduleBranchEmployerHints).forEach(([zone,hints])=>{
-    if(appData.settings.scheduleBranchEmployers[zone]) return;
-    const match = appData.employers.find(employer=>{
-      const name = String(employer.name || '').toLowerCase();
-      return hints.some(hint=>name.includes(hint.toLowerCase()));
-    });
-    if(match) appData.settings.scheduleBranchEmployers[zone] = match.id;
-  });
-}
-
-function getScheduleBranchEmployerId(zone){
-  ensureScheduleBranchEmployers();
-  return appData.settings.scheduleBranchEmployers?.[zone] || '';
-}
-
-function getScheduleBranchEmployer(zone){
-  return getEmployerByIdOrName(getScheduleBranchEmployerId(zone));
-}
-
-function renderScheduleBranchEmployerSelectors(){
-  ensureScheduleBranchEmployers();
-  ['surra','abulhasania','yarmouk'].forEach(zone=>{
-    fillEmployerSelect(document.getElementById(`branchEmployer-${zone}`), getScheduleBranchEmployerId(zone), 'اختر جهة العمل لهذا الفرع...');
-  });
-}
-
-function setScheduleBranchEmployer(zone, employerId){
-  if(!appData.settings.scheduleBranchEmployers) appData.settings.scheduleBranchEmployers = {};
-  appData.settings.scheduleBranchEmployers[zone] = employerId;
-  if(scheduleState?.zones?.[zone]){
-    const employer = getEmployerByIdOrName(employerId);
-    scheduleState.zones[zone] = scheduleState.zones[zone].map(item=>({
-      ...item,
-      employerId:employer?.id || '',
-      employerName:employer?.name || ''
-    }));
-    markScheduleModified();
-    renderScheduleZones();
-  }
-  saveData();
-}
+function renderScheduleBranchEmployerSelectors(){}
 
 function renderScheduleDays(){
   const container = document.getElementById('dayButtons');
@@ -2664,7 +2829,7 @@ function renderScheduleZones(){
         ondragstart="dragFromZone(event,'${zone}',${i})"
         title="اضغط لإضافة ساعات">
         <strong>${item.empName}</strong>
-        <div style="font-size:10px;font-weight:700;color:${color}">${escapeHtml(item.employerName || getScheduleBranchEmployer(zone)?.name || 'جهة غير محددة')}</div>
+        <div style="font-size:10px;font-weight:700;color:${color}">${escapeHtml(item.employerName || scheduleBranchNames[zone] || '')}</div>
         <div style="font-size:11px">${formatTimeRange(item.from,item.to)}</div>
         <div style="font-size:10px;color:#334155">${item.tasks?.join(' + ')||''}</div>
         <button onclick="removeFromZone('${zone}',${i})" style="position:absolute;top:4px;left:4px;background:none;border:none;color:${color};cursor:pointer;font-size:14px;line-height:1">×</button>
@@ -2720,8 +2885,6 @@ function dropToZone(e, zone){
   e.currentTarget.classList.remove('drag-over');
   const data = e.dataTransfer.getData('text');
   if(data.startsWith('emp:')){
-    const branchEmployer = getScheduleBranchEmployer(zone);
-    if(!branchEmployer){ showToast('حدد جهة العمل لهذا الفرع أولاً','error'); return; }
     const empId = data.replace('emp:','');
     pendingSchedEmpId = empId;
     pendingSchedZone = zone;
@@ -2733,13 +2896,11 @@ function dropToZone(e, zone){
     document.getElementById('schedTasksList').innerHTML=`<div class="task-input-row" style="display:flex;gap:8px;margin-bottom:8px"><input class="form-control" placeholder="أدخل المهمة" style="flex:1"></div>`;
     openModal('scheduleSegModal');
   } else if(data.startsWith('zone:') && dragSourceZone){
-    const branchEmployer = getScheduleBranchEmployer(zone);
-    if(!branchEmployer){ showToast('حدد جهة العمل لهذا الفرع أولاً','error'); return; }
     const parts = data.split(':');
     const srcZone = parts[1], srcIdx = parseInt(parts[2]);
     const item = scheduleState.zones[srcZone].splice(srcIdx,1)[0];
     if(item){
-      scheduleState.zones[zone].push({...item,employerId:branchEmployer.id,employerName:branchEmployer.name});
+      scheduleState.zones[zone].push({...item,zone});
       markScheduleModified();
       renderScheduleZones();
       renderStaffSidebar();
@@ -2762,8 +2923,7 @@ function saveScheduleSegment(){
   const tasks = [...document.querySelectorAll('#schedTasksList input')].map(i=>i.value).filter(Boolean);
   const emp = appData.employees.find(x=>x.id===pendingSchedEmpId);
   if(!emp){ closeModal('scheduleSegModal'); return; }
-  const branchEmployer = getScheduleBranchEmployer(pendingSchedZone);
-  if(!branchEmployer){ showToast('حدد جهة العمل لهذا الفرع أولاً','error'); return; }
+  const empEmployer = getEmployerByIdOrName(emp.employerId || emp.employer);
   const fromMin = timeToMin(from), toMin = timeToMin(to);
   if(toMin<=fromMin){ showToast('وقت غير صحيح','error'); return; }
   const hours = (toMin-fromMin)/60;
@@ -2771,7 +2931,18 @@ function saveScheduleSegment(){
   const totalH = parseInt(emp.hours)||8;
   if(hours > totalH-usedH){ showToast(`تجاوزت ساعات الموظف (متبقي ${(totalH-usedH).toFixed(1)}h)`,'error'); return; }
   if(!scheduleState.zones) scheduleState.zones={surra:[],abulhasania:[],yarmouk:[]};
-  scheduleState.zones[pendingSchedZone].push({empId:emp.id,empName:emp.name,from,to,hours,tasks,employerId:branchEmployer.id,employerName:branchEmployer.name,color:getScheduleEmployeeColor(emp.id)});
+  scheduleState.zones[pendingSchedZone].push({
+    empId:emp.id,
+    empName:emp.name,
+    from,
+    to,
+    hours,
+    tasks,
+    zone:pendingSchedZone,
+    employerId:empEmployer?.id || emp.employerId || '',
+    employerName:empEmployer?.name || emp.employer || '',
+    color:getScheduleEmployeeColor(emp.id)
+  });
   markScheduleModified();
   renderScheduleZones();
   renderStaffSidebar();
@@ -2932,6 +3103,11 @@ async function chooseFolder(){
 // ===== INIT ON LOAD =====
 window.addEventListener('DOMContentLoaded', ()=>{
   applyTheme(appData.settings?.theme || 'light');
+  const fingerprintPlaceSession = new URLSearchParams(window.location.search).get('fingerprintPlaceSession');
+  if(fingerprintPlaceSession){
+    initFingerprintPlaceClient(fingerprintPlaceSession);
+    return;
+  }
   setupTimePickers();
   restoreSavedDirectoryHandle();
   updatePinDisplay();

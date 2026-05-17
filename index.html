@@ -6,7 +6,6 @@
 <title>نظام إدارة الموارد البشرية</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232563eb'/%3E%3Ctext x='32' y='41' text-anchor='middle' font-size='24' font-family='Arial' font-weight='700' fill='white'%3EHR%3C/text%3E%3C/svg%3E">
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800&family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -334,26 +333,13 @@
         <div style="max-width:900px">
           <div class="section-title">إضافة جهة عمل</div>
           <div class="card">
-            <div class="form-row">
-              <div class="form-group">
-                <label class="form-label">اسم جهة العمل</label>
-                <input class="form-control" id="employerPageName" placeholder="مثال: فرع السرة">
-              </div>
-              <div class="form-group">
-                <label class="form-label">إحداثيات المكان</label>
-                <input class="form-control" id="employerCoordinates" placeholder="(29.3075520, 47.9741215)" onchange="updateEmployerMapFromInput()">
-              </div>
+            <div class="form-group">
+              <label class="form-label">اسم جهة العمل</label>
+              <input class="form-control" id="employerPageName" placeholder="مثال: شركة المثال">
             </div>
             <div class="form-group">
-              <label class="form-label">موقع الفرع والزون</label>
-              <div id="employerMap"></div>
-            </div>
-            <div class="form-group">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px">
-                <label class="form-label" style="margin:0">حدد حجم الزون المناسب للمكان</label>
-                <span class="tag tag-blue" id="employerZoneRadiusLabel">150 متر</span>
-              </div>
-              <input class="zone-range" id="employerZoneRadius" type="range" min="30" max="1000" step="10" value="150" oninput="updateEmployerZoneRadius(this.value)">
+              <label class="form-label">الفروع المرتبطة بجهة العمل</label>
+              <div class="branch-choice-grid" id="employerBranchChoices"></div>
             </div>
             <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px">
               <button class="btn btn-secondary" onclick="navTo('employers')">إلغاء</button>
@@ -390,7 +376,7 @@
           </div>
           <div class="section-title">البصمة</div>
           <div class="card" style="margin-bottom:20px">
-            <div class="setting-row" style="margin-bottom:0">
+            <div class="setting-row">
               <div>
                 <div class="setting-label">رموز دخول البصمة</div>
                 <div class="setting-sub">تحديد رمز خاص لكل موظف لاستخدام تطبيق البصمة</div>
@@ -399,6 +385,13 @@
                 <button class="btn btn-primary" onclick="navTo('fingerprintCodes')">تحديد رموز الدخول للبصمة</button>
                 <button class="btn btn-secondary" onclick="openFingerprintApp()">فتح تطبيق البصمة</button>
               </div>
+            </div>
+            <div class="setting-row" style="margin-bottom:0">
+              <div>
+                <div class="setting-label">أماكن البصمة</div>
+                <div class="setting-sub">ربط مواقع البصمة بجهات العمل من خلال رابط تسجيل الموقع</div>
+              </div>
+              <button class="btn btn-primary" onclick="openFingerprintPlacesPage()">أماكن البصمة</button>
             </div>
           </div>
           <div class="section-title">المظهر</div>
@@ -435,6 +428,53 @@
               <button class="btn btn-secondary" onclick="navTo('settings')">رجوع للإعدادات</button>
               <button class="btn btn-primary" onclick="saveFingerprintCodes()">حفظ</button>
             </div>
+          </div>
+        </div>
+      </div>
+      <div class="page" id="page-fingerprintPlaces">
+        <div style="max-width:940px">
+          <div class="section-title">أماكن البصمة</div>
+          <div class="card" style="margin-bottom:18px">
+            <div class="fingerprint-place-header">
+              <div>
+                <div class="setting-label">رابط تسجيل مكان البصمة</div>
+                <div class="setting-sub">افتح الرابط من كمبيوتر موجود في مكان البصمة المطلوب، ثم احفظ الموقع من هذه الصفحة.</div>
+              </div>
+              <button class="btn btn-secondary btn-sm" onclick="copyFingerprintPlaceLink()">نسخ الرابط</button>
+            </div>
+            <input class="form-control fingerprint-place-link" id="fingerprintPlaceLink" readonly>
+            <div class="fingerprint-device-card waiting" id="fingerprintPlaceDeviceCard">
+              <div class="fingerprint-device-icon" id="fingerprintDeviceIcon" aria-hidden="true"></div>
+              <div>
+                <div class="setting-label" id="fingerprintDeviceTitle">بانتظار اتصال جهاز كمبيوتر</div>
+                <div class="setting-sub" id="fingerprintDeviceDetails">افتح الرابط أعلاه من الجهاز الموجود في مكان البصمة.</div>
+              </div>
+            </div>
+          </div>
+          <div class="card fingerprint-bind-panel" id="fingerprintBindPanel" style="display:none;margin-bottom:18px">
+            <div class="section-title" style="margin-top:0">ربط مكان البصمة</div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">حدود البصمة بالمتر</label>
+                <input class="form-control" id="fingerprintPlaceRadius" inputmode="numeric" value="20" oninput="normalizeNumericInput(this)">
+              </div>
+              <div class="form-group">
+                <label class="form-label">جهة العمل المرتبطة بهذا المكان</label>
+                <div class="branch-choice-grid employer-choice-grid" id="fingerprintPlaceEmployerChoices"></div>
+              </div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:10px">
+              <button class="btn btn-primary" onclick="saveFingerprintPlace()">حفظ مكان البصمة</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="fingerprint-place-header">
+              <div>
+                <div class="setting-label">الأماكن المحفوظة</div>
+                <div class="setting-sub">يمكن حذف أي مكان وإعادة ربطه من جديد.</div>
+              </div>
+            </div>
+            <div id="fingerprintPlacesList"></div>
           </div>
         </div>
       </div>
@@ -601,7 +641,6 @@
   <span id="toastMsg">تم بنجاح</span>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="script.js"></script>
 </body>
 </html>
