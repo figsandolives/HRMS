@@ -72,7 +72,7 @@
   async function publishFingerprintPlaceSession(sessionId, payload){
     if(!sessionId) throw new Error('sessionId is required');
     const db = await getDatabase();
-    await db.ref(`fingerprintPlaceSessions/${sessionId}`).set({
+    await db.ref(`hrData/fingerprintPlaceSessions/${sessionId}`).set({
       ...payload,
       sessionId,
       connectedAt:firebase.database.ServerValue.TIMESTAMP,
@@ -82,8 +82,16 @@
 
   async function watchFingerprintPlaceSession(sessionId, callback){
     const db = await getDatabase();
-    const ref = db.ref(`fingerprintPlaceSessions/${sessionId}`);
+    const ref = db.ref(`hrData/fingerprintPlaceSessions/${sessionId}`);
     const handler = snap=>callback(snap.val());
+    ref.on('value', handler);
+    return ()=>ref.off('value', handler);
+  }
+
+  async function watchFingerprintPlaceSessions(callback){
+    const db = await getDatabase();
+    const ref = db.ref('hrData/fingerprintPlaceSessions');
+    const handler = snap=>callback(snap.val() || {});
     ref.on('value', handler);
     return ()=>ref.off('value', handler);
   }
@@ -106,7 +114,7 @@
       savedAt,
       updatedAt:savedAt
     });
-    if(sessionId) await db.ref(`fingerprintPlaceSessions/${sessionId}`).remove();
+    if(sessionId) await db.ref(`hrData/fingerprintPlaceSessions/${sessionId}`).remove();
     return id;
   }
 
@@ -121,6 +129,7 @@
     publishApprovedSchedule,
     publishFingerprintPlaceSession,
     watchFingerprintPlaceSession,
+    watchFingerprintPlaceSessions,
     watchFingerprintPlaces,
     saveFingerprintPlace,
     deleteFingerprintPlace
