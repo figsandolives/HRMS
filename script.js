@@ -231,10 +231,11 @@ function loadExternalScript(src){
 
 async function loadFirebasePublisher(options={}){
   const needsSessionWatcher = options.requireSessionWatcher === true;
-  const hasRequiredApi = window.publishHrmsApprovedSchedule && window.hrmsFirebase && (!needsSessionWatcher || typeof window.hrmsFirebase.watchFingerprintPlaceSessions === 'function');
+  const needsFresh = options.fresh === true;
+  const hasRequiredApi = !needsFresh && window.publishHrmsApprovedSchedule && window.hrmsFirebase && (!needsSessionWatcher || typeof window.hrmsFirebase.watchFingerprintPlaceSessions === 'function');
   if(hasRequiredApi) return;
-  if(!firebasePublisherScriptPromise || needsSessionWatcher){
-    const cacheKey = needsSessionWatcher ? `?v=${Date.now()}` : '';
+  if(!firebasePublisherScriptPromise || needsSessionWatcher || needsFresh){
+    const cacheKey = (needsSessionWatcher || needsFresh) ? `?v=${Date.now()}` : '';
     firebasePublisherScriptPromise = loadExternalScript(`firebase-publisher.js${cacheKey}`);
   }
   await firebasePublisherScriptPromise;
@@ -630,8 +631,13 @@ async function initFingerprintPlaceClient(sessionId){
     </section>
   `;
   try{
-    await loadFirebasePublisher();
+    await loadFirebasePublisher({fresh:true});
+    if(!window.hrmsFirebase?.publishFingerprintPlaceSession){
+      throw new Error('ملف Firebase قديم. ارفع firebase-publisher.js ثم حدث الصفحة.');
+    }
+    document.getElementById('placeClientText').textContent = 'جاري التقاط عدة قراءات GPS دقيقة...';
     const location = await getDetailedDeviceLocation();
+    document.getElementById('placeClientText').textContent = 'جاري إرسال موقع الجهاز إلى النظام...';
     await window.hrmsFirebase.publishFingerprintPlaceSession(sessionId,{
       status:'connected',
       location,
@@ -643,7 +649,10 @@ async function initFingerprintPlaceClient(sessionId){
   } catch(err){
     console.error(err);
     document.getElementById('placeClientTitle').textContent = 'تعذر ربط مكان البصمة';
-    document.getElementById('placeClientText').textContent = err.message || 'تحقق من اتصال الإنترنت والسماح بالموقع.';
+    const message = err?.code === 'PERMISSION_DENIED'
+      ? 'Firebase رفض الحفظ. تأكد من رفع firebase-publisher.js وتعديل قواعد Firebase للسماح بالكتابة داخل hrData.'
+      : (err.message || 'تحقق من اتصال الإنترنت والسماح بالموقع.');
+    document.getElementById('placeClientText').textContent = message;
   }
 }
 
