@@ -255,9 +255,15 @@ async function publishApprovedScheduleToFirebase(dayKey, schedule){
 
 function getFingerprintPlaceSessionId(){
   if(!fingerprintPlaceSessionId){
-    fingerprintPlaceSessionId = `fp-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    fingerprintPlaceSessionId = localStorage.getItem('hrmsFingerprintPlaceSessionId') || `fp-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    localStorage.setItem('hrmsFingerprintPlaceSessionId', fingerprintPlaceSessionId);
   }
   return fingerprintPlaceSessionId;
+}
+
+function resetFingerprintPlaceSessionId(){
+  localStorage.removeItem('hrmsFingerprintPlaceSessionId');
+  fingerprintPlaceSessionId = null;
 }
 
 function getFingerprintPlaceLink(){
@@ -285,14 +291,30 @@ async function setupFingerprintPlacesPage(){
   await loadFirebasePublisher();
   if(fingerprintPlaceSessionUnsubscribe) fingerprintPlaceSessionUnsubscribe();
   if(fingerprintPlacesUnsubscribe) fingerprintPlacesUnsubscribe();
-  fingerprintPlaceSessionUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaceSession(getFingerprintPlaceSessionId(), data=>{
-    pendingFingerprintPlaceDevice = data || null;
-    renderFingerprintPlaceDevice(data);
+  fingerprintPlaceSessionUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaceSessions(data=>{
+    const session = pickFingerprintPlaceSession(data);
+    pendingFingerprintPlaceDevice = session || null;
+    renderFingerprintPlaceDevice(session);
   });
   fingerprintPlacesUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaces(data=>{
     fingerprintPlacesCache = data || {};
     renderFingerprintPlacesList();
   });
+}
+
+function pickFingerprintPlaceSession(sessionsMap={}){
+  const currentId = getFingerprintPlaceSessionId();
+  const sessions = Object.values(sessionsMap || {})
+    .filter(session=>session?.location)
+    .sort((a,b)=>getFingerprintSessionTime(b)-getFingerprintSessionTime(a));
+  if(!sessions.length) return null;
+  return sessions.find(session=>session.sessionId === currentId) || sessions[0];
+}
+
+function getFingerprintSessionTime(session){
+  if(typeof session?.connectedAt === 'number') return session.connectedAt;
+  const parsed = Date.parse(session?.updatedAt || session?.location?.capturedAt || '');
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function copyFingerprintPlaceLink(){
@@ -355,6 +377,8 @@ function formatFingerprintDeviceDetails(data){
     `خط العرض: ${Number(loc.lat).toFixed(7)}`,
     `خط الطول: ${Number(loc.lng).toFixed(7)}`,
     `دقة الموقع: ${Math.round(Number(loc.accuracy) || 0)} متر`,
+    loc.sampleCount ? `عدد قراءات GPS: ${loc.sampleCount}` : '',
+    loc.bestAccuracy ? `أفضل دقة: ${Math.round(Number(loc.bestAccuracy))} متر` : '',
     loc.altitude != null ? `الارتفاع: ${Math.round(Number(loc.altitude))} متر` : 'الارتفاع: غير متاح من المتصفح',
     loc.altitudeAccuracy != null ? `دقة الارتفاع: ${Math.round(Number(loc.altitudeAccuracy))} متر` : '',
     `النظام: ${escapeHtml(device.platform || 'غير معروف')}`,
@@ -422,15 +446,17 @@ async function saveFingerprintPlace(){
         accuracy:Number(location.accuracy) || null,
         altitude:location.altitude ?? null,
         altitudeAccuracy:location.altitudeAccuracy ?? null,
+        sampleCount:location.sampleCount || null,
+        bestAccuracy:location.bestAccuracy || null,
         capturedAt:pendingFingerprintPlaceDevice.updatedAt || new Date().toISOString()
       },
       radiusMeters:radius,
       employerIds:employers.map(employer=>employer.id),
       employerNames:employers.map(employer=>employer.name),
       createdAt:new Date().toISOString()
-    }, getFingerprintPlaceSessionId());
+    }, pendingFingerprintPlaceDevice.sessionId || getFingerprintPlaceSessionId());
     pendingFingerprintPlaceDevice = null;
-    fingerprintPlaceSessionId = null;
+    resetFingerprintPlaceSessionId();
     document.getElementById('fingerprintPlaceRadius').value = '20';
     showToast('تم حفظ مكان البصمة بنجاح');
     await setupFingerprintPlacesPage();
@@ -475,26 +501,106 @@ function getRegistrationDeviceInfo(){
   };
 }
 
+const PLACE_GPS_TARGET_ACCURACY = 15;
+const PLACE_GPS_SAMPLE_TIMEOUT_MS = 12000;
+const PLACE_GPS_MIN_SAMPLES = 4;
+
+function getRegistrationAccuracyMeters(value){
+  const accuracy = Number(value);
+  return Number.isFinite(accuracy) && accuracy > 0 ? accuracy : 0;
+}
+
+function normalizeRegistrationGeoPosition(pos){
+  return {
+    lat:pos.coords.latitude,
+    lng:pos.coords.longitude,
+    accuracy:pos.coords.accuracy,
+    altitude:pos.coords.altitude,
+    altitudeAccuracy:pos.coords.altitudeAccuracy,
+    heading:pos.coords.heading,
+    speed:pos.coords.speed,
+    capturedAt:new Date(pos.timestamp || Date.now()).toISOString()
+  };
+}
+
+function combineRegistrationLocationSamples(samples){
+  const usable = samples
+    .filter(sample=>Number.isFinite(Number(sample.lat)) && Number.isFinite(Number(sample.lng)))
+    .sort((a,b)=>getRegistrationAccuracyMeters(a.accuracy)-getRegistrationAccuracyMeters(b.accuracy))
+    .slice(0,6);
+  if(!usable.length) return null;
+  const weightFor = sample=>1 / Math.max(1, getRegistrationAccuracyMeters(sample.accuracy)) ** 2;
+  const totalWeight = usable.reduce((sum,sample)=>sum+weightFor(sample),0);
+  const weighted = usable.reduce((acc,sample)=>{
+    const weight = weightFor(sample);
+    acc.lat += sample.lat * weight;
+    acc.lng += sample.lng * weight;
+    if(sample.altitude != null && Number.isFinite(Number(sample.altitude))){
+      acc.altitude += Number(sample.altitude) * weight;
+      acc.altitudeWeight += weight;
+    }
+    return acc;
+  },{lat:0,lng:0,altitude:0,altitudeWeight:0});
+  const best = usable[0];
+  return {
+    lat:weighted.lat / totalWeight,
+    lng:weighted.lng / totalWeight,
+    accuracy:getRegistrationAccuracyMeters(best.accuracy),
+    altitude:weighted.altitudeWeight ? weighted.altitude / weighted.altitudeWeight : best.altitude,
+    altitudeAccuracy:best.altitudeAccuracy,
+    heading:best.heading,
+    speed:best.speed,
+    sampleCount:samples.length,
+    bestAccuracy:getRegistrationAccuracyMeters(best.accuracy),
+    capturedAt:new Date().toISOString()
+  };
+}
+
 function getDetailedDeviceLocation(){
   return new Promise((resolve,reject)=>{
     if(!navigator.geolocation){
       reject(new Error('الموقع غير مدعوم في هذا الجهاز'));
       return;
     }
-    navigator.geolocation.getCurrentPosition(pos=>{
-      resolve({
-        lat:pos.coords.latitude,
-        lng:pos.coords.longitude,
-        accuracy:pos.coords.accuracy,
-        altitude:pos.coords.altitude,
-        altitudeAccuracy:pos.coords.altitudeAccuracy,
-        heading:pos.coords.heading,
-        speed:pos.coords.speed,
-        capturedAt:new Date(pos.timestamp).toISOString()
-      });
-    },()=>reject(new Error('اسمح للمتصفح بالوصول إلى الموقع')),{
+    const samples = [];
+    let settled = false;
+    let watchId = null;
+    const finish = (callback,value)=>{
+      if(settled) return;
+      settled = true;
+      if(watchId !== null) navigator.geolocation.clearWatch(watchId);
+      clearTimeout(timer);
+      callback(value);
+    };
+    const timer = setTimeout(()=>{
+      const combined = combineRegistrationLocationSamples(samples);
+      if(!combined){
+        finish(reject, new Error('تعذر التقاط موقع دقيق'));
+        return;
+      }
+      if(combined.accuracy > PLACE_GPS_TARGET_ACCURACY){
+        finish(reject, new Error(`دقة GPS ضعيفة (${Math.round(combined.accuracy)} متر). حاول من مكان أقرب للنافذة ثم أعد المحاولة`));
+        return;
+      }
+      finish(resolve, combined);
+    },PLACE_GPS_SAMPLE_TIMEOUT_MS);
+    watchId = navigator.geolocation.watchPosition(pos=>{
+      samples.push(normalizeRegistrationGeoPosition(pos));
+      const combined = combineRegistrationLocationSamples(samples);
+      if(combined && samples.length >= PLACE_GPS_MIN_SAMPLES && combined.accuracy <= PLACE_GPS_TARGET_ACCURACY){
+        finish(resolve, combined);
+      }
+    },()=>{
+      if(samples.length){
+        const combined = combineRegistrationLocationSamples(samples);
+        if(combined && combined.accuracy <= PLACE_GPS_TARGET_ACCURACY) finish(resolve, combined);
+        else finish(reject, new Error('دقة GPS ضعيفة أو لم يتم السماح بالموقع'));
+      } else {
+        finish(reject, new Error('اسمح للمتصفح بالوصول إلى الموقع'));
+      }
+    },{
       enableHighAccuracy:true,
-      timeout:20000,
+      timeout:PLACE_GPS_SAMPLE_TIMEOUT_MS,
       maximumAge:0
     });
   });
