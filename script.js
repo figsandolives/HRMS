@@ -229,10 +229,13 @@ function loadExternalScript(src){
   });
 }
 
-async function loadFirebasePublisher(){
-  if(window.publishHrmsApprovedSchedule && window.hrmsFirebase) return;
-  if(!firebasePublisherScriptPromise){
-    firebasePublisherScriptPromise = loadExternalScript('firebase-publisher.js');
+async function loadFirebasePublisher(options={}){
+  const needsSessionWatcher = options.requireSessionWatcher === true;
+  const hasRequiredApi = window.publishHrmsApprovedSchedule && window.hrmsFirebase && (!needsSessionWatcher || typeof window.hrmsFirebase.watchFingerprintPlaceSessions === 'function');
+  if(hasRequiredApi) return;
+  if(!firebasePublisherScriptPromise || needsSessionWatcher){
+    const cacheKey = needsSessionWatcher ? `?v=${Date.now()}` : '';
+    firebasePublisherScriptPromise = loadExternalScript(`firebase-publisher.js${cacheKey}`);
   }
   await firebasePublisherScriptPromise;
 }
@@ -288,14 +291,23 @@ async function setupFingerprintPlacesPage(){
   if(linkInput) linkInput.value = getFingerprintPlaceLink();
   renderFingerprintPlaceEmployerChoices();
   renderFingerprintPlacesList();
-  await loadFirebasePublisher();
+  await loadFirebasePublisher({requireSessionWatcher:true});
   if(fingerprintPlaceSessionUnsubscribe) fingerprintPlaceSessionUnsubscribe();
   if(fingerprintPlacesUnsubscribe) fingerprintPlacesUnsubscribe();
-  fingerprintPlaceSessionUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaceSessions(data=>{
-    const session = pickFingerprintPlaceSession(data);
-    pendingFingerprintPlaceDevice = session || null;
-    renderFingerprintPlaceDevice(session);
-  });
+  if(typeof window.hrmsFirebase.watchFingerprintPlaceSessions === 'function'){
+    fingerprintPlaceSessionUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaceSessions(data=>{
+      const session = pickFingerprintPlaceSession(data);
+      pendingFingerprintPlaceDevice = session || null;
+      renderFingerprintPlaceDevice(session);
+    });
+  } else if(typeof window.hrmsFirebase.watchFingerprintPlaceSession === 'function'){
+    fingerprintPlaceSessionUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaceSession(getFingerprintPlaceSessionId(), data=>{
+      pendingFingerprintPlaceDevice = data || null;
+      renderFingerprintPlaceDevice(data);
+    });
+  } else {
+    throw new Error('ملف Firebase قديم. ارفع firebase-publisher.js ثم حدث الصفحة.');
+  }
   fingerprintPlacesUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaces(data=>{
     fingerprintPlacesCache = data || {};
     renderFingerprintPlacesList();
