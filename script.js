@@ -161,6 +161,19 @@ function parseDateInput(value){
   return new Date(y,m-1,d);
 }
 
+function formatArabicDateTime(value){
+  const date = new Date(value);
+  if(Number.isNaN(date.getTime())) return String(value || '');
+  return date.toLocaleString('ar-KW',{
+    year:'numeric',
+    month:'2-digit',
+    day:'2-digit',
+    hour:'2-digit',
+    minute:'2-digit',
+    second:'2-digit'
+  });
+}
+
 function openFingerprintApp(){
   window.location.href = encodeURI('تطبيق البصمة/index.html');
 }
@@ -278,7 +291,7 @@ async function openFingerprintPlacesPage(){
   showLoading('جاري فتح أماكن البصمة...');
   navTo('fingerprintPlaces');
   try{
-    await setupFingerprintPlacesPage();
+    await setupFingerprintPlacesPage({freshLink:true});
   } catch(err){
     console.error(err);
     showToast('تعذر فتح أماكن البصمة','error');
@@ -287,24 +300,26 @@ async function openFingerprintPlacesPage(){
   }
 }
 
-async function setupFingerprintPlacesPage(){
+async function setupFingerprintPlacesPage(options={}){
+  if(options.freshLink) resetFingerprintPlaceSessionId();
   const linkInput = document.getElementById('fingerprintPlaceLink');
+  const sessionId = getFingerprintPlaceSessionId();
   if(linkInput) linkInput.value = getFingerprintPlaceLink();
   renderFingerprintPlaceEmployerChoices();
   renderFingerprintPlacesList();
   await loadFirebasePublisher({requireSessionWatcher:true});
   if(fingerprintPlaceSessionUnsubscribe) fingerprintPlaceSessionUnsubscribe();
   if(fingerprintPlacesUnsubscribe) fingerprintPlacesUnsubscribe();
-  if(typeof window.hrmsFirebase.watchFingerprintPlaceSessions === 'function'){
-    fingerprintPlaceSessionUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaceSessions(data=>{
-      const session = pickFingerprintPlaceSession(data);
-      pendingFingerprintPlaceDevice = session || null;
-      renderFingerprintPlaceDevice(session);
-    });
-  } else if(typeof window.hrmsFirebase.watchFingerprintPlaceSession === 'function'){
-    fingerprintPlaceSessionUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaceSession(getFingerprintPlaceSessionId(), data=>{
+  if(typeof window.hrmsFirebase.watchFingerprintPlaceSession === 'function'){
+    fingerprintPlaceSessionUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaceSession(sessionId, data=>{
       pendingFingerprintPlaceDevice = data || null;
       renderFingerprintPlaceDevice(data);
+    });
+  } else if(typeof window.hrmsFirebase.watchFingerprintPlaceSessions === 'function'){
+    fingerprintPlaceSessionUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaceSessions(data=>{
+      const session = pickFingerprintPlaceSession(data, sessionId);
+      pendingFingerprintPlaceDevice = session || null;
+      renderFingerprintPlaceDevice(session);
     });
   } else {
     throw new Error('ملف Firebase قديم. ارفع firebase-publisher.js ثم حدث الصفحة.');
@@ -315,13 +330,9 @@ async function setupFingerprintPlacesPage(){
   });
 }
 
-function pickFingerprintPlaceSession(sessionsMap={}){
-  const currentId = getFingerprintPlaceSessionId();
-  const sessions = Object.values(sessionsMap || {})
-    .filter(session=>session?.location)
-    .sort((a,b)=>getFingerprintSessionTime(b)-getFingerprintSessionTime(a));
-  if(!sessions.length) return null;
-  return sessions.find(session=>session.sessionId === currentId) || sessions[0];
+function pickFingerprintPlaceSession(sessionsMap={}, sessionId=getFingerprintPlaceSessionId()){
+  const session = sessionsMap?.[sessionId];
+  return session?.location ? session : null;
 }
 
 function getFingerprintSessionTime(session){
@@ -339,6 +350,21 @@ function copyFingerprintPlaceLink(){
     input?.select();
     showToast('انسخ الرابط من الخانة');
   });
+}
+
+async function refreshFingerprintPlaceLink(){
+  showLoading('جاري إنشاء رابط جديد...');
+  try{
+    resetFingerprintPlaceSessionId();
+    pendingFingerprintPlaceDevice = null;
+    await setupFingerprintPlacesPage();
+    showToast('تم إنشاء رابط جديد');
+  } catch(err){
+    console.error(err);
+    showToast('تعذر إنشاء رابط جديد','error');
+  } finally {
+    hideLoading();
+  }
 }
 
 function renderFingerprintPlaceEmployerChoices(){
@@ -372,13 +398,13 @@ function renderFingerprintPlaceDevice(data){
   if(!card || !title || !details || !panel) return;
   if(!data?.location){
     card.className = 'fingerprint-device-card waiting';
-    title.textContent = 'بانتظار اتصال جهاز كمبيوتر';
-    details.textContent = 'افتح الرابط أعلاه من الجهاز الموجود في مكان البصمة.';
+    title.textContent = 'بانتظار اتصال الهاتف';
+    details.textContent = 'افتح الرابط أعلاه من الهاتف الموجود داخل مكان البصمة.';
     panel.style.display = 'none';
     return;
   }
   card.className = 'fingerprint-device-card connected';
-  title.textContent = 'تم اتصال جهاز كمبيوتر من رابط مكان البصمة';
+  title.textContent = 'تم اتصال الهاتف من رابط مكان البصمة';
   details.innerHTML = formatFingerprintDeviceDetails(data);
   panel.style.display = 'block';
 }
@@ -386,21 +412,36 @@ function renderFingerprintPlaceDevice(data){
 function formatFingerprintDeviceDetails(data){
   const loc = data.location || {};
   const device = data.device || {};
+  const lat = Number(loc.lat);
+  const lng = Number(loc.lng);
+  const mapUrl = Number.isFinite(lat) && Number.isFinite(lng)
+    ? `https://www.google.com/maps?q=${lat},${lng}`
+    : '';
   const rows = [
-    `خط العرض: ${Number(loc.lat).toFixed(7)}`,
-    `خط الطول: ${Number(loc.lng).toFixed(7)}`,
+    `خط العرض: ${Number.isFinite(lat) ? lat.toFixed(7) : 'غير متاح'}`,
+    `خط الطول: ${Number.isFinite(lng) ? lng.toFixed(7) : 'غير متاح'}`,
     `دقة الموقع: ${Math.round(Number(loc.accuracy) || 0)} متر`,
+    loc.qualityMessage ? `حالة الدقة: ${escapeHtml(loc.qualityMessage)}` : '',
     loc.sampleCount ? `عدد قراءات GPS: ${loc.sampleCount}` : '',
     loc.bestAccuracy ? `أفضل دقة: ${Math.round(Number(loc.bestAccuracy))} متر` : '',
     loc.altitude != null ? `الارتفاع: ${Math.round(Number(loc.altitude))} متر` : 'الارتفاع: غير متاح من المتصفح',
     loc.altitudeAccuracy != null ? `دقة الارتفاع: ${Math.round(Number(loc.altitudeAccuracy))} متر` : '',
+    loc.heading != null ? `اتجاه الحركة: ${Math.round(Number(loc.heading))} درجة` : '',
+    loc.speed != null ? `السرعة: ${Number(loc.speed).toFixed(1)} م/ث` : '',
+    loc.capturedAt ? `وقت قراءة الموقع: ${escapeHtml(formatArabicDateTime(loc.capturedAt))}` : '',
+    data.updatedAt ? `آخر تحديث: ${escapeHtml(formatArabicDateTime(data.updatedAt))}` : '',
     `النظام: ${escapeHtml(device.platform || 'غير معروف')}`,
     `اللغة: ${escapeHtml(device.language || '')}`,
+    Array.isArray(device.languages) && device.languages.length ? `لغات الجهاز: ${escapeHtml(device.languages.join(', '))}` : '',
     `المنطقة الزمنية: ${escapeHtml(device.timeZone || '')}`,
     `الشاشة: ${escapeHtml(device.screen || '')}`,
+    device.connection?.effectiveType ? `نوع الاتصال: ${escapeHtml(device.connection.effectiveType)}` : '',
+    device.connection?.rtt ? `زمن الاستجابة: ${escapeHtml(String(device.connection.rtt))}ms` : '',
+    device.online != null ? `حالة الإنترنت: ${device.online ? 'متصل' : 'غير متصل'}` : '',
     `المتصفح: ${escapeHtml(device.userAgent || '')}`
   ].filter(Boolean);
-  return `<div class="fingerprint-place-meta">${rows.join('<br>')}</div>`;
+  if(mapUrl) rows.push(`<a href="${mapUrl}" target="_blank" rel="noopener">فتح الموقع على الخريطة</a>`);
+  return `<div class="fingerprint-place-meta" dir="rtl">${rows.join('<br>')}</div>`;
 }
 
 function renderFingerprintPlacesList(){
@@ -419,7 +460,8 @@ function renderFingerprintPlacesList(){
       `الحدود: ${Number(place.radiusMeters) || 0} متر`,
       Number.isFinite(Number(loc.lat)) && Number.isFinite(Number(loc.lng)) ? `الإحداثيات: ${Number(loc.lat).toFixed(7)}, ${Number(loc.lng).toFixed(7)}` : '',
       loc.altitude != null ? `الارتفاع: ${Math.round(Number(loc.altitude))} متر` : '',
-      loc.accuracy != null ? `الدقة: ${Math.round(Number(loc.accuracy))} متر` : ''
+      loc.accuracy != null ? `الدقة: ${Math.round(Number(loc.accuracy))} متر` : '',
+      loc.qualityMessage ? `حالة الدقة: ${escapeHtml(loc.qualityMessage)}` : ''
     ].filter(Boolean).join('<br>');
     return `
       <div class="fingerprint-place-item">
@@ -435,7 +477,7 @@ function renderFingerprintPlacesList(){
 
 async function saveFingerprintPlace(){
   if(!pendingFingerprintPlaceDevice?.location){
-    showToast('افتح الرابط من جهاز الكمبيوتر أولاً','error');
+    showToast('افتح الرابط من الهاتف أولاً','error');
     return;
   }
   const radius = Number(normalizeDigits(document.getElementById('fingerprintPlaceRadius')?.value || ''));
@@ -461,6 +503,8 @@ async function saveFingerprintPlace(){
         altitudeAccuracy:location.altitudeAccuracy ?? null,
         sampleCount:location.sampleCount || null,
         bestAccuracy:location.bestAccuracy || null,
+        quality:location.quality || '',
+        qualityMessage:location.qualityMessage || '',
         capturedAt:pendingFingerprintPlaceDevice.updatedAt || new Date().toISOString()
       },
       radiusMeters:radius,
@@ -569,6 +613,18 @@ function combineRegistrationLocationSamples(samples){
   };
 }
 
+function markRegistrationLocationQuality(location){
+  if(!location) return null;
+  const accuracy = getRegistrationAccuracyMeters(location.accuracy);
+  return {
+    ...location,
+    quality:accuracy && accuracy <= PLACE_GPS_TARGET_ACCURACY ? 'high' : 'weak',
+    qualityMessage:accuracy && accuracy <= PLACE_GPS_TARGET_ACCURACY
+      ? `دقة جيدة داخل ${PLACE_GPS_TARGET_ACCURACY} متر`
+      : `دقة ضعيفة: ${Math.round(accuracy || 0)} متر`
+  };
+}
+
 function getDetailedDeviceLocation(){
   return new Promise((resolve,reject)=>{
     if(!navigator.geolocation){
@@ -591,22 +647,18 @@ function getDetailedDeviceLocation(){
         finish(reject, new Error('تعذر التقاط موقع دقيق'));
         return;
       }
-      if(combined.accuracy > PLACE_GPS_TARGET_ACCURACY){
-        finish(reject, new Error(`دقة GPS ضعيفة (${Math.round(combined.accuracy)} متر). حاول من مكان أقرب للنافذة ثم أعد المحاولة`));
-        return;
-      }
-      finish(resolve, combined);
+      finish(resolve, markRegistrationLocationQuality(combined));
     },PLACE_GPS_SAMPLE_TIMEOUT_MS);
     watchId = navigator.geolocation.watchPosition(pos=>{
       samples.push(normalizeRegistrationGeoPosition(pos));
       const combined = combineRegistrationLocationSamples(samples);
       if(combined && samples.length >= PLACE_GPS_MIN_SAMPLES && combined.accuracy <= PLACE_GPS_TARGET_ACCURACY){
-        finish(resolve, combined);
+        finish(resolve, markRegistrationLocationQuality(combined));
       }
     },()=>{
       if(samples.length){
         const combined = combineRegistrationLocationSamples(samples);
-        if(combined && combined.accuracy <= PLACE_GPS_TARGET_ACCURACY) finish(resolve, combined);
+        if(combined) finish(resolve, markRegistrationLocationQuality(combined));
         else finish(reject, new Error('دقة GPS ضعيفة أو لم يتم السماح بالموقع'));
       } else {
         finish(reject, new Error('اسمح للمتصفح بالوصول إلى الموقع'));
@@ -626,7 +678,7 @@ async function initFingerprintPlaceClient(sessionId){
       <div class="card" style="max-width:520px;width:100%;text-align:center">
         <div class="spinner" style="margin:0 auto 18px"></div>
         <div class="section-title" id="placeClientTitle" style="margin:0 0 8px">جاري ربط مكان البصمة</div>
-        <div class="setting-sub" id="placeClientText">اسمح للمتصفح بالوصول إلى الموقع من هذا الكمبيوتر.</div>
+        <div class="setting-sub" id="placeClientText">اسمح للمتصفح بالوصول إلى موقع هذا الهاتف.</div>
       </div>
     </section>
   `;
@@ -637,14 +689,14 @@ async function initFingerprintPlaceClient(sessionId){
     }
     document.getElementById('placeClientText').textContent = 'جاري التقاط عدة قراءات GPS دقيقة...';
     const location = await getDetailedDeviceLocation();
-    document.getElementById('placeClientText').textContent = 'جاري إرسال موقع الجهاز إلى النظام...';
+    document.getElementById('placeClientText').textContent = 'جاري إرسال موقع الهاتف إلى النظام...';
     await window.hrmsFirebase.publishFingerprintPlaceSession(sessionId,{
       status:'connected',
       location,
-      device:getRegistrationDeviceInfo(),
+      device:{...getRegistrationDeviceInfo(), kind:'phone'},
       pageUrl:window.location.href
     });
-    document.getElementById('placeClientTitle').textContent = 'تم إرسال موقع الجهاز';
+    document.getElementById('placeClientTitle').textContent = 'تم إرسال موقع الهاتف';
     document.getElementById('placeClientText').textContent = 'ارجع إلى صفحة أماكن البصمة في النظام لاختيار جهة العمل وحدود البصمة ثم الحفظ.';
   } catch(err){
     console.error(err);

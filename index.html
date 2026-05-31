@@ -438,16 +438,19 @@
             <div class="fingerprint-place-header">
               <div>
                 <div class="setting-label">رابط تسجيل مكان البصمة</div>
-                <div class="setting-sub">افتح الرابط من كمبيوتر موجود في مكان البصمة المطلوب، ثم احفظ الموقع من هذه الصفحة.</div>
+                <div class="setting-sub">أرسل الرابط إلى هاتف موجود في مكان البصمة المطلوب. عند فتحه سيظهر موقع الهاتف هنا، ثم احفظه كمكان بصمة معتمد.</div>
               </div>
-              <button class="btn btn-secondary btn-sm" onclick="copyFingerprintPlaceLink()">نسخ الرابط</button>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-secondary btn-sm" onclick="refreshFingerprintPlaceLink()">رابط جديد</button>
+                <button class="btn btn-secondary btn-sm" onclick="copyFingerprintPlaceLink()">نسخ الرابط</button>
+              </div>
             </div>
             <input class="form-control fingerprint-place-link" id="fingerprintPlaceLink" readonly>
             <div class="fingerprint-device-card waiting" id="fingerprintPlaceDeviceCard">
               <div class="fingerprint-device-icon" id="fingerprintDeviceIcon" aria-hidden="true"></div>
               <div>
-                <div class="setting-label" id="fingerprintDeviceTitle">بانتظار اتصال جهاز كمبيوتر</div>
-                <div class="setting-sub" id="fingerprintDeviceDetails">افتح الرابط أعلاه من الجهاز الموجود في مكان البصمة.</div>
+                <div class="setting-label" id="fingerprintDeviceTitle">بانتظار اتصال الهاتف</div>
+                <div class="setting-sub" id="fingerprintDeviceDetails">افتح الرابط أعلاه من الهاتف الموجود داخل مكان البصمة.</div>
               </div>
             </div>
           </div>
