@@ -438,7 +438,7 @@
             <div class="fingerprint-place-header">
               <div>
                 <div class="setting-label">إنشاء باركود مكان البصمة</div>
-                <div class="setting-sub">اختر الفرع، ثم أنشئ باركود واطبعه أو اعرضه في مكان البصمة. التطبيق لا يقبل البصمة إلا بعد مسح الباركود الصحيح.</div>
+                <div class="setting-sub">اختر الفرع وحدد إحداثيات مكان العمل وحدوده، ثم أنشئ باركود. التطبيق لا يقبل البصمة إلا بعد مسح الباركود الصحيح من داخل مكان العمل.</div>
               </div>
             </div>
             <div class="form-row">
@@ -449,6 +449,16 @@
               <div class="form-group">
                 <label class="form-label">اسم اختياري للباركود</label>
                 <input class="form-control" id="fingerprintBarcodeTitle" placeholder="مثال: باركود مدخل السرة">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">إحداثيات مكان العمل</label>
+                <input class="form-control" id="fingerprintBarcodeCoordinates" dir="ltr" placeholder="29.3075520, 47.9741215">
+              </div>
+              <div class="form-group">
+                <label class="form-label">حدود السماح بالمتر</label>
+                <input class="form-control" id="fingerprintBarcodeRadius" inputmode="numeric" placeholder="مثال: 20" value="20">
               </div>
             </div>
             <div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap">
@@ -629,7 +639,29 @@
   <span id="toastMsg">تم بنجاح</span>
 </div>
 
-<script src="vendor/qrcode.bundle.js"></script>
+<script>
+window.loadHrmsQrFallback = function(){
+  if(window.__hrmsQrFallbackPromise) return window.__hrmsQrFallbackPromise;
+  window.__hrmsQrFallbackPromise = new Promise((resolve,reject)=>{
+    if(window.QRCodeLib) return resolve(window.QRCodeLib);
+    if(window.QRCode?.toCanvas){
+      window.QRCodeLib = window.QRCode;
+      return resolve(window.QRCodeLib);
+    }
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js';
+    script.onload = ()=>{
+      window.QRCodeLib = window.QRCode || window.QRCodeLib;
+      window.renderFingerprintBarcodeCanvases?.();
+      resolve(window.QRCodeLib);
+    };
+    script.onerror = ()=>reject(new Error('تعذر تحميل مولد الباركود'));
+    document.head.appendChild(script);
+  });
+  return window.__hrmsQrFallbackPromise;
+};
+</script>
+<script src="qrcode.bundle.js" onload="try{window.QRCodeLib = window.require && window.require('QRCode')}catch(_err){}" onerror="window.loadHrmsQrFallback()"></script>
 <script src="script.js"></script>
 </body>
 </html>

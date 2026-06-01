@@ -324,11 +324,29 @@ function renderFingerprintBarcodeBranchChoices(){
 
 function getFingerprintQrLib(){
   if(window.QRCodeLib) return window.QRCodeLib;
+  if(window.QRCode?.toCanvas){
+    window.QRCodeLib = window.QRCode;
+    return window.QRCodeLib;
+  }
   if(typeof window.require === 'function'){
     try{
       window.QRCodeLib = window.require('QRCode');
       return window.QRCodeLib;
     } catch(_err){}
+  }
+  return null;
+}
+
+async function ensureFingerprintQrLib(){
+  const current = getFingerprintQrLib();
+  if(current?.toCanvas) return current;
+  if(typeof window.loadHrmsQrFallback === 'function'){
+    try{
+      await window.loadHrmsQrFallback();
+      return getFingerprintQrLib();
+    } catch(err){
+      console.error(err);
+    }
   }
   return null;
 }
@@ -346,11 +364,35 @@ function getFingerprintPlaceBranch(branchKey){
   return scheduleBranchOptions.find(branch=>branch.key === branchKey) || scheduleBranchOptions[0];
 }
 
+function parseFingerprintBarcodeCoordinates(value){
+  const normalized = normalizeDigits(String(value || ''))
+    .replace(/[()]/g,'')
+    .replace(/،/g,',')
+    .trim();
+  const parts = normalized.split(',').map(part=>Number(part.trim()));
+  if(parts.length < 2 || !Number.isFinite(parts[0]) || !Number.isFinite(parts[1])) return null;
+  const [lat,lng] = parts;
+  if(Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return {lat,lng};
+}
+
 async function createFingerprintBarcodePlace(){
   const branchKey = document.getElementById('fingerprintBarcodeBranch')?.value || 'surra';
   const branch = getFingerprintPlaceBranch(branchKey);
   const titleInput = document.getElementById('fingerprintBarcodeTitle');
+  const coordinatesInput = document.getElementById('fingerprintBarcodeCoordinates');
+  const radiusInput = document.getElementById('fingerprintBarcodeRadius');
   const title = titleInput?.value.trim() || `باركود ${branch.label}`;
+  const coordinates = parseFingerprintBarcodeCoordinates(coordinatesInput?.value || '');
+  const radius = Number(normalizeDigits(radiusInput?.value || ''));
+  if(!coordinates){
+    showToast('أدخل إحداثيات مكان العمل بشكل صحيح','error');
+    return;
+  }
+  if(!Number.isFinite(radius) || radius <= 0){
+    showToast('أدخل حدود السماح بالمتر','error');
+    return;
+  }
   const token = generateFingerprintBarcodeToken();
   showLoading('جاري إنشاء الباركود...');
   try{
@@ -362,6 +404,11 @@ async function createFingerprintBarcodePlace(){
       branchName:branch.label,
       barcodeToken:token,
       barcodeValue:getFingerprintBarcodeValue(token),
+      location:{
+        lat:coordinates.lat,
+        lng:coordinates.lng
+      },
+      radiusMeters:radius,
       createdAt:new Date().toISOString()
     });
     if(titleInput) titleInput.value = '';
@@ -374,10 +421,10 @@ async function createFingerprintBarcodePlace(){
   }
 }
 
-function renderFingerprintBarcodeCanvas(canvasId, value, size=156){
+async function renderFingerprintBarcodeCanvas(canvasId, value, size=156){
   const canvas = document.getElementById(canvasId);
   if(!canvas || !value) return;
-  const qr = getFingerprintQrLib();
+  const qr = await ensureFingerprintQrLib();
   if(!qr?.toCanvas){
     const fallback = canvas.nextElementSibling;
     if(fallback) fallback.textContent = 'تعذر تحميل مولد الباركود';
@@ -535,8 +582,13 @@ function renderFingerprintPlacesList(){
   }
   list.innerHTML = places.map(place=>{
     const branchName = place.branchName || getBranchLabel(place.branchKey);
+    const lat = Number(place.location?.lat);
+    const lng = Number(place.location?.lng);
+    const coordinates = Number.isFinite(lat) && Number.isFinite(lng) ? `${lat.toFixed(7)}, ${lng.toFixed(7)}` : '';
     const meta = [
       `الفرع: ${escapeHtml(branchName || 'غير محدد')}`,
+      coordinates ? `الإحداثيات: ${escapeHtml(coordinates)}` : 'الإحداثيات: غير محددة',
+      `الحدود: ${escapeHtml(String(place.radiusMeters || 0))} متر`,
       place.createdAt ? `تاريخ الإنشاء: ${escapeHtml(formatArabicDateTime(place.createdAt))}` : '',
       `رمز الباركود: ${escapeHtml(place.barcodeToken || '')}`
     ].filter(Boolean).join('<br>');
