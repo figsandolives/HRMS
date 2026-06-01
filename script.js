@@ -82,6 +82,12 @@ let fingerprintPlaceSessionUnsubscribe = null;
 let fingerprintPlacesUnsubscribe = null;
 let pendingFingerprintPlaceDevice = null;
 let fingerprintPlacesCache = {};
+let fingerprintBarcodeMap = null;
+let fingerprintBarcodeMarker = null;
+let fingerprintBarcodeCircle = null;
+let fingerprintBarcodeMapBound = false;
+let fingerprintBarcodeCoordinateTimer = null;
+const FINGERPRINT_MAP_DEFAULT_CENTER = {lat:29.342263, lng:48.018131};
 
 function saveData(options={}){
   ensureAppDataShape();
@@ -302,6 +308,7 @@ async function openFingerprintPlacesPage(){
 
 async function setupFingerprintPlacesPage(options={}){
   renderFingerprintBarcodeBranchChoices();
+  setupFingerprintBarcodeMap();
   renderFingerprintPlacesList();
   await loadFirebasePublisher({fresh:true});
   if(fingerprintPlaceSessionUnsubscribe) fingerprintPlaceSessionUnsubscribe();
@@ -374,6 +381,124 @@ function parseFingerprintBarcodeCoordinates(value){
   const [lat,lng] = parts;
   if(Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
   return {lat,lng};
+}
+
+function formatFingerprintBarcodeCoordinates(coords){
+  return `${Number(coords.lat).toFixed(7)}, ${Number(coords.lng).toFixed(7)}`;
+}
+
+function getFingerprintBarcodeRadius(){
+  const input = document.getElementById('fingerprintBarcodeRadius');
+  const radius = Number(normalizeDigits(input?.value || ''));
+  return Number.isFinite(radius) && radius > 0 ? radius : 20;
+}
+
+function syncFingerprintRadiusControls(radius=getFingerprintBarcodeRadius()){
+  const input = document.getElementById('fingerprintBarcodeRadius');
+  const slider = document.getElementById('fingerprintBarcodeRadiusSlider');
+  const label = document.getElementById('fingerprintBarcodeRadiusValue');
+  const cleanRadius = Math.max(1, Math.round(Number(radius) || 20));
+  if(input && input.value !== String(cleanRadius)) input.value = String(cleanRadius);
+  if(slider){
+    if(cleanRadius > Number(slider.max || 200)) slider.max = String(cleanRadius);
+    if(slider.value !== String(cleanRadius)) slider.value = String(cleanRadius);
+  }
+  if(label) label.textContent = `${cleanRadius} متر`;
+  if(fingerprintBarcodeCircle) fingerprintBarcodeCircle.setRadius(cleanRadius);
+  return cleanRadius;
+}
+
+function setFingerprintBarcodeMapPoint(coords, options={}){
+  if(!fingerprintBarcodeMap || !window.L || !coords) return;
+  const radius = syncFingerprintRadiusControls();
+  const latLng = [coords.lat, coords.lng];
+  if(!fingerprintBarcodeMarker){
+    fingerprintBarcodeMarker = window.L.marker(latLng,{draggable:true}).addTo(fingerprintBarcodeMap);
+    fingerprintBarcodeMarker.on('dragend', ()=>{
+      const point = fingerprintBarcodeMarker.getLatLng();
+      setFingerprintBarcodeMapPoint({lat:point.lat,lng:point.lng},{writeInput:true,center:false});
+    });
+  } else {
+    fingerprintBarcodeMarker.setLatLng(latLng);
+  }
+  if(!fingerprintBarcodeCircle){
+    fingerprintBarcodeCircle = window.L.circle(latLng,{
+      radius,
+      color:'#2563eb',
+      weight:2,
+      fillColor:'#2563eb',
+      fillOpacity:0.14
+    }).addTo(fingerprintBarcodeMap);
+  } else {
+    fingerprintBarcodeCircle.setLatLng(latLng);
+    fingerprintBarcodeCircle.setRadius(radius);
+  }
+  if(options.writeInput){
+    const input = document.getElementById('fingerprintBarcodeCoordinates');
+    if(input) input.value = formatFingerprintBarcodeCoordinates(coords);
+  }
+  if(options.center !== false){
+    const bounds = fingerprintBarcodeCircle.getBounds();
+    fingerprintBarcodeMap.fitBounds(bounds,{padding:[36,36],maxZoom:19,animate:false});
+  }
+}
+
+function updateFingerprintBarcodeMapFromFields(options={}){
+  const input = document.getElementById('fingerprintBarcodeCoordinates');
+  const coords = parseFingerprintBarcodeCoordinates(input?.value || '');
+  syncFingerprintRadiusControls();
+  if(coords) setFingerprintBarcodeMapPoint(coords,options);
+}
+
+function setupFingerprintBarcodeMap(){
+  const mapEl = document.getElementById('fingerprintBarcodeMap');
+  if(!mapEl) return;
+  const coordinatesInput = document.getElementById('fingerprintBarcodeCoordinates');
+  const radiusInput = document.getElementById('fingerprintBarcodeRadius');
+  const radiusSlider = document.getElementById('fingerprintBarcodeRadiusSlider');
+  if(!window.L){
+    mapEl.innerHTML = '<div class="fingerprint-map-empty">تعذر تحميل الخريطة. تأكد من اتصال الإنترنت ثم حدث الصفحة.</div>';
+    syncFingerprintRadiusControls();
+    return;
+  }
+  if(!fingerprintBarcodeMap){
+    fingerprintBarcodeMap = window.L.map(mapEl,{
+      zoomControl:true,
+      attributionControl:true
+    }).setView([FINGERPRINT_MAP_DEFAULT_CENTER.lat,FINGERPRINT_MAP_DEFAULT_CENTER.lng],17);
+    window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+      maxZoom:22,
+      attribution:'&copy; OpenStreetMap'
+    }).addTo(fingerprintBarcodeMap);
+    fingerprintBarcodeMap.on('click', event=>{
+      setFingerprintBarcodeMapPoint(
+        {lat:event.latlng.lat,lng:event.latlng.lng},
+        {writeInput:true,center:false}
+      );
+    });
+  }
+  if(!fingerprintBarcodeMapBound){
+    coordinatesInput?.addEventListener('input', ()=>{
+      clearTimeout(fingerprintBarcodeCoordinateTimer);
+      fingerprintBarcodeCoordinateTimer = setTimeout(()=>{
+        updateFingerprintBarcodeMapFromFields({center:true});
+      },250);
+    });
+    radiusInput?.addEventListener('input', ()=>{
+      const radius = syncFingerprintRadiusControls();
+      if(radiusSlider && radius > Number(radiusSlider.max || 200)) radiusSlider.max = String(radius);
+    });
+    radiusSlider?.addEventListener('input', ()=>{
+      const radiusInput = document.getElementById('fingerprintBarcodeRadius');
+      if(radiusInput) radiusInput.value = radiusSlider.value;
+      syncFingerprintRadiusControls(Number(radiusSlider.value));
+    });
+    fingerprintBarcodeMapBound = true;
+  }
+  setTimeout(()=>{
+    fingerprintBarcodeMap.invalidateSize();
+    updateFingerprintBarcodeMapFromFields({center:true});
+  },80);
 }
 
 async function createFingerprintBarcodePlace(){
