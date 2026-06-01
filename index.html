@@ -438,8 +438,8 @@
           <div class="card" style="margin-bottom:18px">
             <div class="fingerprint-place-header">
               <div>
-                <div class="setting-label">إنشاء باركود مكان البصمة</div>
-                <div class="setting-sub">اختر الفرع وحدد إحداثيات مكان العمل وحدوده، ثم أنشئ باركود. التطبيق لا يقبل البصمة إلا بعد مسح الباركود الصحيح من داخل مكان العمل.</div>
+                <div class="setting-label" id="fingerprintBarcodeFormTitle">إنشاء باركود مكان البصمة</div>
+                <div class="setting-sub" id="fingerprintBarcodeFormSub">اختر الفرع وحدد إحداثيات مكان العمل وحدوده، ثم أنشئ باركود. التطبيق لا يقبل البصمة إلا بعد مسح الباركود الصحيح من داخل مكان العمل.</div>
               </div>
             </div>
             <div class="form-row">
@@ -473,14 +473,15 @@
               </div>
             </div>
             <div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap">
-              <button class="btn btn-primary" onclick="createFingerprintBarcodePlace()">إنشاء باركود</button>
+              <button class="btn btn-secondary" id="fingerprintBarcodeCancelBtn" style="display:none" onclick="cancelFingerprintBarcodeEdit()">إلغاء التعديل</button>
+              <button class="btn btn-primary" id="fingerprintBarcodeSubmitBtn" onclick="saveFingerprintBarcodePlaceFromForm()">إنشاء باركود</button>
             </div>
           </div>
           <div class="card">
             <div class="fingerprint-place-header">
               <div>
                 <div class="setting-label">الباركودات المحفوظة</div>
-                <div class="setting-sub">يمكن طباعة أي باركود أو حذفه وإنشاء باركود جديد للفرع.</div>
+                <div class="setting-sub">يمكن تعديل أي باركود أو تحميله أو حذفه وإنشاء باركود جديد للفرع.</div>
               </div>
             </div>
             <div id="fingerprintPlacesList"></div>

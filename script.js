@@ -87,6 +87,7 @@ let fingerprintBarcodeMarker = null;
 let fingerprintBarcodeCircle = null;
 let fingerprintBarcodeMapBound = false;
 let fingerprintBarcodeCoordinateTimer = null;
+let editingFingerprintBarcodeId = null;
 const FINGERPRINT_MAP_DEFAULT_CENTER = {lat:29.342263, lng:48.018131};
 
 function saveData(options={}){
@@ -501,7 +502,7 @@ function setupFingerprintBarcodeMap(){
   },80);
 }
 
-async function createFingerprintBarcodePlace(){
+function getFingerprintBarcodeFormData(existingPlace=null){
   const branchKey = document.getElementById('fingerprintBarcodeBranch')?.value || 'surra';
   const branch = getFingerprintPlaceBranch(branchKey);
   const titleInput = document.getElementById('fingerprintBarcodeTitle');
@@ -512,38 +513,102 @@ async function createFingerprintBarcodePlace(){
   const radius = Number(normalizeDigits(radiusInput?.value || ''));
   if(!coordinates){
     showToast('أدخل إحداثيات مكان العمل بشكل صحيح','error');
-    return;
+    return null;
   }
   if(!Number.isFinite(radius) || radius <= 0){
     showToast('أدخل حدود السماح بالمتر','error');
+    return null;
+  }
+  const token = existingPlace?.barcodeToken || generateFingerprintBarcodeToken();
+  return {
+    ...(existingPlace || {}),
+    id:existingPlace?.id,
+    mode:'barcode',
+    title,
+    branchKey:branch.key,
+    branchName:branch.label,
+    barcodeToken:token,
+    barcodeValue:existingPlace?.barcodeValue || getFingerprintBarcodeValue(token),
+    location:{
+      lat:coordinates.lat,
+      lng:coordinates.lng
+    },
+    radiusMeters:radius,
+    createdAt:existingPlace?.createdAt || new Date().toISOString()
+  };
+}
+
+function setFingerprintBarcodeFormMode(place=null){
+  const titleEl = document.getElementById('fingerprintBarcodeFormTitle');
+  const subEl = document.getElementById('fingerprintBarcodeFormSub');
+  const submitBtn = document.getElementById('fingerprintBarcodeSubmitBtn');
+  const cancelBtn = document.getElementById('fingerprintBarcodeCancelBtn');
+  const titleInput = document.getElementById('fingerprintBarcodeTitle');
+  const branchSelect = document.getElementById('fingerprintBarcodeBranch');
+  const coordinatesInput = document.getElementById('fingerprintBarcodeCoordinates');
+  const radiusInput = document.getElementById('fingerprintBarcodeRadius');
+  if(place){
+    editingFingerprintBarcodeId = place.id;
+    if(titleEl) titleEl.textContent = 'تعديل باركود مكان البصمة';
+    if(subEl) subEl.textContent = 'عدّل الفرع أو الاسم أو الإحداثيات أو حدود الزون، ثم احفظ التعديل. نفس الباركود يبقى صالحاً بعد التعديل.';
+    if(submitBtn) submitBtn.textContent = 'حفظ التعديل';
+    if(cancelBtn) cancelBtn.style.display = 'inline-flex';
+    if(titleInput) titleInput.value = place.title || '';
+    if(branchSelect) branchSelect.value = place.branchKey || 'surra';
+    const lat = Number(place.location?.lat);
+    const lng = Number(place.location?.lng);
+    if(coordinatesInput && Number.isFinite(lat) && Number.isFinite(lng)) coordinatesInput.value = formatFingerprintBarcodeCoordinates({lat,lng});
+    if(radiusInput) radiusInput.value = String(Math.max(1, Math.round(Number(place.radiusMeters) || 20)));
+    updateFingerprintBarcodeMapFromFields({center:true});
     return;
   }
-  const token = generateFingerprintBarcodeToken();
-  showLoading('جاري إنشاء الباركود...');
+  editingFingerprintBarcodeId = null;
+  if(titleEl) titleEl.textContent = 'إنشاء باركود مكان البصمة';
+  if(subEl) subEl.textContent = 'اختر الفرع وحدد إحداثيات مكان العمل وحدوده، ثم أنشئ باركود. التطبيق لا يقبل البصمة إلا بعد مسح الباركود الصحيح من داخل مكان العمل.';
+  if(submitBtn) submitBtn.textContent = 'إنشاء باركود';
+  if(cancelBtn) cancelBtn.style.display = 'none';
+}
+
+function cancelFingerprintBarcodeEdit(){
+  const titleInput = document.getElementById('fingerprintBarcodeTitle');
+  if(titleInput) titleInput.value = '';
+  setFingerprintBarcodeFormMode(null);
+  showToast('تم إلغاء التعديل');
+}
+
+function editFingerprintBarcodePlace(id){
+  const place = fingerprintPlacesCache?.[id];
+  if(!place){
+    showToast('تعذر العثور على الباركود','error');
+    return;
+  }
+  setFingerprintBarcodeFormMode(place);
+  document.getElementById('page-fingerprintPlaces')?.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+async function saveFingerprintBarcodePlaceFromForm(){
+  const wasEditing = Boolean(editingFingerprintBarcodeId);
+  const existingPlace = wasEditing ? fingerprintPlacesCache?.[editingFingerprintBarcodeId] : null;
+  const payload = getFingerprintBarcodeFormData(existingPlace);
+  if(!payload) return;
+  const titleInput = document.getElementById('fingerprintBarcodeTitle');
+  showLoading(wasEditing ? 'جاري حفظ التعديل...' : 'جاري إنشاء الباركود...');
   try{
     await loadFirebasePublisher();
-    await window.hrmsFirebase.saveFingerprintPlace({
-      mode:'barcode',
-      title,
-      branchKey:branch.key,
-      branchName:branch.label,
-      barcodeToken:token,
-      barcodeValue:getFingerprintBarcodeValue(token),
-      location:{
-        lat:coordinates.lat,
-        lng:coordinates.lng
-      },
-      radiusMeters:radius,
-      createdAt:new Date().toISOString()
-    });
+    await window.hrmsFirebase.saveFingerprintPlace(payload);
     if(titleInput) titleInput.value = '';
-    showToast('تم إنشاء باركود مكان البصمة');
+    setFingerprintBarcodeFormMode(null);
+    showToast(wasEditing ? 'تم حفظ تعديل الباركود' : 'تم إنشاء باركود مكان البصمة');
   } catch(err){
     console.error(err);
-    showToast('تعذر إنشاء الباركود','error');
+    showToast(wasEditing ? 'تعذر حفظ تعديل الباركود' : 'تعذر إنشاء الباركود','error');
   } finally {
     hideLoading();
   }
+}
+
+async function createFingerprintBarcodePlace(){
+  return saveFingerprintBarcodePlaceFromForm();
 }
 
 async function renderFingerprintBarcodeCanvas(canvasId, value, size=156){
@@ -728,6 +793,7 @@ function renderFingerprintPlacesList(){
           <div class="fingerprint-place-meta">${meta}</div>
         </div>
         <div class="barcode-place-actions">
+          <button class="btn btn-secondary btn-sm" onclick="editFingerprintBarcodePlace('${place.id}')">تعديل</button>
           <button class="btn btn-secondary btn-sm" onclick="downloadFingerprintBarcode('${place.id}')">تحميل</button>
           <button class="btn btn-danger btn-sm" onclick="deleteFingerprintPlace('${place.id}')">حذف</button>
         </div>
@@ -793,6 +859,7 @@ async function deleteFingerprintPlace(id){
   try{
     await loadFirebasePublisher();
     await window.hrmsFirebase.deleteFingerprintPlace(id);
+    if(editingFingerprintBarcodeId === id) cancelFingerprintBarcodeEdit();
     showToast('تم حذف مكان البصمة');
   } catch(err){
     console.error(err);
