@@ -116,7 +116,7 @@ const colors = ['#2563eb','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06
 const state = {employees:[], schedules:{}, punches:[], hrLoaded:false, punchesLoaded:false};
 const dateDayKeys = ['sun','mon','tue','wed','thu','fri','sat'];
 const branchNames = {
-  surra:'السرة',
+  surra:'حولي',
   abulhasania:'ابو الحصانية',
   yarmouk:'اليرموك'
 };
@@ -254,7 +254,7 @@ function getTimeColumns(punches){
 function normalizeBranchName(value){
   const text = String(value || '').trim();
   if(!text) return '';
-  if(/السرة|surra/i.test(text)) return 'السرة';
+  if(/حولي|hawally|hawalli|السرة|surra/i.test(text)) return 'حولي';
   if(/أبو الحصانية|ابو الحصانية|hasaniya|hasania/i.test(text)) return 'ابو الحصانية';
   if(/اليرموك|yarmouk/i.test(text)) return 'اليرموك';
   return text.replace(/^فرع\s+/,'');

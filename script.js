@@ -581,7 +581,7 @@ function renderFingerprintPlacesList(){
     return;
   }
   list.innerHTML = places.map(place=>{
-    const branchName = place.branchName || getBranchLabel(place.branchKey);
+    const branchName = normalizeBranchDisplayName(place.branchName || getBranchLabel(place.branchKey));
     const lat = Number(place.location?.lat);
     const lng = Number(place.location?.lng);
     const coordinates = Number.isFinite(lat) && Number.isFinite(lng) ? `${lat.toFixed(7)}, ${lng.toFixed(7)}` : '';
@@ -1656,19 +1656,19 @@ function queueFolderSync(){
 }
 
 const scheduleBranchNames = {
-  surra:'فرع السرة',
+  surra:'فرع حولي',
   abulhasania:'فرع أبو الحصانية',
   yarmouk:'فرع اليرموك'
 };
 
 const scheduleBranchOptions = [
-  {key:'surra', label:'السرة', aliases:['السرة','surra']},
+  {key:'surra', label:'حولي', aliases:['حولي','hawally','hawalli','السرة','surra']},
   {key:'abulhasania', label:'أبو الحصانية', aliases:['أبو الحصانية','ابو الحصانية','abulhasania','hasania']},
   {key:'yarmouk', label:'اليرموك', aliases:['اليرموك','yarmouk']}
 ];
 
 const scheduleBranchNamesEn = {
-  surra:'Surra Branch',
+  surra:'Hawally Branch',
   abulhasania:'Abu Al Hasaniya Branch',
   yarmouk:'Yarmouk Branch'
 };
@@ -2908,6 +2908,14 @@ function getBranchLabel(branchKey){
   return scheduleBranchOptions.find(branch=>branch.key === branchKey)?.label || branchKey;
 }
 
+function normalizeBranchDisplayName(value){
+  const text = String(value || '').trim();
+  if(!text) return '';
+  if(/فرع\s*السرة|Surra Branch/i.test(text)) return 'فرع حولي';
+  if(/السرة|surra/i.test(text)) return 'حولي';
+  return text;
+}
+
 function normalizeEmployerBranches(employer){
   if(Array.isArray(employer?.branches) && employer.branches.length) return employer.branches;
   const name = String(employer?.name || '').toLowerCase();
@@ -3205,7 +3213,7 @@ function dropToZone(e, zone){
     pendingSchedEmpId = empId;
     pendingSchedZone = zone;
     const emp = appData.employees.find(x=>x.id===empId);
-    document.getElementById('schedModalTitle').textContent = `${emp?.name} - ${zone==='surra'?'السرة':zone==='abulhasania'?'أبو الحصانية':'اليرموك'}`;
+    document.getElementById('schedModalTitle').textContent = `${emp?.name} - ${zone==='surra'?'حولي':zone==='abulhasania'?'أبو الحصانية':'اليرموك'}`;
     setupTimePickers();
     setTimePickerValue('schedSegFrom','');
     setTimePickerValue('schedSegTo','');
