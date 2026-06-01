@@ -6,6 +6,7 @@
 <title>نظام إدارة الموارد البشرية</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232563eb'/%3E%3Ctext x='32' y='41' text-anchor='middle' font-size='24' font-family='Arial' font-weight='700' fill='white'%3EHR%3C/text%3E%3C/svg%3E">
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800&family=Cairo:wght@300;400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -461,6 +462,16 @@
                 <input class="form-control" id="fingerprintBarcodeRadius" inputmode="numeric" placeholder="مثال: 20" value="20">
               </div>
             </div>
+            <div class="fingerprint-map-wrap">
+              <div id="fingerprintBarcodeMap" class="fingerprint-map"></div>
+              <div class="fingerprint-map-panel">
+                <div class="fingerprint-map-panel-head">
+                  <span>حدود الزون</span>
+                  <strong id="fingerprintBarcodeRadiusValue">20 متر</strong>
+                </div>
+                <input type="range" id="fingerprintBarcodeRadiusSlider" min="1" max="200" step="1" value="20">
+              </div>
+            </div>
             <div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap">
               <button class="btn btn-primary" onclick="createFingerprintBarcodePlace()">إنشاء باركود</button>
             </div>
@@ -662,6 +673,7 @@ window.loadHrmsQrFallback = function(){
 };
 </script>
 <script src="qrcode.bundle.js" onload="try{window.QRCodeLib = window.require && window.require('QRCode')}catch(_err){}" onerror="window.loadHrmsQrFallback()"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="script.js"></script>
 </body>
 </html>
