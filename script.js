@@ -301,33 +301,114 @@ async function openFingerprintPlacesPage(){
 }
 
 async function setupFingerprintPlacesPage(options={}){
-  if(options.freshLink) resetFingerprintPlaceSessionId();
-  const linkInput = document.getElementById('fingerprintPlaceLink');
-  const sessionId = getFingerprintPlaceSessionId();
-  if(linkInput) linkInput.value = getFingerprintPlaceLink();
-  renderFingerprintPlaceEmployerChoices();
+  renderFingerprintBarcodeBranchChoices();
   renderFingerprintPlacesList();
-  await loadFirebasePublisher({requireSessionWatcher:true});
+  await loadFirebasePublisher({fresh:true});
   if(fingerprintPlaceSessionUnsubscribe) fingerprintPlaceSessionUnsubscribe();
   if(fingerprintPlacesUnsubscribe) fingerprintPlacesUnsubscribe();
-  if(typeof window.hrmsFirebase.watchFingerprintPlaceSession === 'function'){
-    fingerprintPlaceSessionUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaceSession(sessionId, data=>{
-      pendingFingerprintPlaceDevice = data || null;
-      renderFingerprintPlaceDevice(data);
-    });
-  } else if(typeof window.hrmsFirebase.watchFingerprintPlaceSessions === 'function'){
-    fingerprintPlaceSessionUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaceSessions(data=>{
-      const session = pickFingerprintPlaceSession(data, sessionId);
-      pendingFingerprintPlaceDevice = session || null;
-      renderFingerprintPlaceDevice(session);
-    });
-  } else {
-    throw new Error('ملف Firebase قديم. ارفع firebase-publisher.js ثم حدث الصفحة.');
-  }
+  fingerprintPlaceSessionUnsubscribe = null;
+  if(typeof window.hrmsFirebase.watchFingerprintPlaces !== 'function') throw new Error('ملف Firebase قديم. ارفع firebase-publisher.js ثم حدث الصفحة.');
   fingerprintPlacesUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaces(data=>{
     fingerprintPlacesCache = data || {};
     renderFingerprintPlacesList();
   });
+}
+
+function renderFingerprintBarcodeBranchChoices(){
+  const select = document.getElementById('fingerprintBarcodeBranch');
+  if(!select) return;
+  select.innerHTML = scheduleBranchOptions.map(branch=>`
+    <option value="${branch.key}">${branch.label}</option>
+  `).join('');
+}
+
+function getFingerprintQrLib(){
+  if(window.QRCodeLib) return window.QRCodeLib;
+  if(typeof window.require === 'function'){
+    try{
+      window.QRCodeLib = window.require('QRCode');
+      return window.QRCodeLib;
+    } catch(_err){}
+  }
+  return null;
+}
+
+function generateFingerprintBarcodeToken(){
+  const random = Math.random().toString(36).slice(2,10);
+  return `bq-${Date.now()}-${random}`;
+}
+
+function getFingerprintBarcodeValue(token){
+  return `HRMS-BASMA:${token}`;
+}
+
+function getFingerprintPlaceBranch(branchKey){
+  return scheduleBranchOptions.find(branch=>branch.key === branchKey) || scheduleBranchOptions[0];
+}
+
+async function createFingerprintBarcodePlace(){
+  const branchKey = document.getElementById('fingerprintBarcodeBranch')?.value || 'surra';
+  const branch = getFingerprintPlaceBranch(branchKey);
+  const titleInput = document.getElementById('fingerprintBarcodeTitle');
+  const title = titleInput?.value.trim() || `باركود ${branch.label}`;
+  const token = generateFingerprintBarcodeToken();
+  showLoading('جاري إنشاء الباركود...');
+  try{
+    await loadFirebasePublisher();
+    await window.hrmsFirebase.saveFingerprintPlace({
+      mode:'barcode',
+      title,
+      branchKey:branch.key,
+      branchName:branch.label,
+      barcodeToken:token,
+      barcodeValue:getFingerprintBarcodeValue(token),
+      createdAt:new Date().toISOString()
+    });
+    if(titleInput) titleInput.value = '';
+    showToast('تم إنشاء باركود مكان البصمة');
+  } catch(err){
+    console.error(err);
+    showToast('تعذر إنشاء الباركود','error');
+  } finally {
+    hideLoading();
+  }
+}
+
+function renderFingerprintBarcodeCanvas(canvasId, value, size=156){
+  const canvas = document.getElementById(canvasId);
+  if(!canvas || !value) return;
+  const qr = getFingerprintQrLib();
+  if(!qr?.toCanvas){
+    const fallback = canvas.nextElementSibling;
+    if(fallback) fallback.textContent = 'تعذر تحميل مولد الباركود';
+    return;
+  }
+  qr.toCanvas(canvas, value, {
+    width:size,
+    margin:1,
+    errorCorrectionLevel:'M',
+    color:{dark:'#0f172a', light:'#ffffff'}
+  }).catch(err=>{
+    console.error(err);
+    const fallback = canvas.nextElementSibling;
+    if(fallback) fallback.textContent = 'تعذر رسم الباركود';
+  });
+}
+
+function renderFingerprintBarcodeCanvases(){
+  Object.values(fingerprintPlacesCache || {}).forEach(place=>{
+    if(place?.barcodeValue) renderFingerprintBarcodeCanvas(`barcodeCanvas-${place.id}`, place.barcodeValue);
+  });
+}
+
+function downloadFingerprintBarcode(id){
+  const place = fingerprintPlacesCache?.[id];
+  const canvas = document.getElementById(`barcodeCanvas-${id}`);
+  if(!place || !canvas) return;
+  const link = document.createElement('a');
+  link.href = canvas.toDataURL('image/png');
+  link.download = `${safeFileName(place.title || place.branchName || 'باركود البصمة')}.png`;
+  link.click();
 }
 
 function pickFingerprintPlaceSession(sessionsMap={}, sessionId=getFingerprintPlaceSessionId()){
@@ -447,32 +528,36 @@ function formatFingerprintDeviceDetails(data){
 function renderFingerprintPlacesList(){
   const list = document.getElementById('fingerprintPlacesList');
   if(!list) return;
-  const places = Object.values(fingerprintPlacesCache || {});
+  const places = Object.values(fingerprintPlacesCache || {}).filter(place=>place?.mode === 'barcode' || place?.barcodeToken || place?.barcodeValue);
   if(!places.length){
-    list.innerHTML = '<div class="empty-state"><p>لا توجد أماكن بصمة محفوظة بعد</p></div>';
+    list.innerHTML = '<div class="empty-state"><p>لا توجد باركودات بصمة محفوظة بعد</p></div>';
     return;
   }
   list.innerHTML = places.map(place=>{
-    const loc = place.location || {};
-    const employerNames = Array.isArray(place.employerNames) ? place.employerNames.join('، ') : '';
+    const branchName = place.branchName || getBranchLabel(place.branchKey);
     const meta = [
-      `جهة العمل: ${escapeHtml(employerNames || 'غير محددة')}`,
-      `الحدود: ${Number(place.radiusMeters) || 0} متر`,
-      Number.isFinite(Number(loc.lat)) && Number.isFinite(Number(loc.lng)) ? `الإحداثيات: ${Number(loc.lat).toFixed(7)}, ${Number(loc.lng).toFixed(7)}` : '',
-      loc.altitude != null ? `الارتفاع: ${Math.round(Number(loc.altitude))} متر` : '',
-      loc.accuracy != null ? `الدقة: ${Math.round(Number(loc.accuracy))} متر` : '',
-      loc.qualityMessage ? `حالة الدقة: ${escapeHtml(loc.qualityMessage)}` : ''
+      `الفرع: ${escapeHtml(branchName || 'غير محدد')}`,
+      place.createdAt ? `تاريخ الإنشاء: ${escapeHtml(formatArabicDateTime(place.createdAt))}` : '',
+      `رمز الباركود: ${escapeHtml(place.barcodeToken || '')}`
     ].filter(Boolean).join('<br>');
     return `
-      <div class="fingerprint-place-item">
+      <div class="fingerprint-place-item barcode-place-item">
+        <div class="barcode-preview">
+          <canvas id="barcodeCanvas-${place.id}" width="156" height="156"></canvas>
+          <div class="setting-sub"></div>
+        </div>
         <div>
-          <div class="setting-label">مكان بصمة محفوظ</div>
+          <div class="setting-label">${escapeHtml(place.title || `باركود ${branchName}`)}</div>
           <div class="fingerprint-place-meta">${meta}</div>
         </div>
-        <button class="btn btn-danger btn-sm" onclick="deleteFingerprintPlace('${place.id}')">حذف</button>
+        <div class="barcode-place-actions">
+          <button class="btn btn-secondary btn-sm" onclick="downloadFingerprintBarcode('${place.id}')">تحميل</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteFingerprintPlace('${place.id}')">حذف</button>
+        </div>
       </div>
     `;
   }).join('');
+  setTimeout(renderFingerprintBarcodeCanvases,0);
 }
 
 async function saveFingerprintPlace(){
