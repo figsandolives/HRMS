@@ -1,0 +1,28 @@
+{
+  "name": "hrms-basma-native",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Native iOS and Android wrapper for the HRMS fingerprint app.",
+  "scripts": {
+    "native:icons": "node scripts/generate-native-icons.mjs",
+    "native:copy": "cap copy",
+    "native:sync": "cap sync",
+    "native:ios": "cap open ios",
+    "native:android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@capacitor/cli": "^8.3.4",
+    "@capacitor/core": "^8.3.4",
+    "@capacitor/geolocation": "^8.2.0",
+    "@capacitor/ios": "^8.3.4",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "browserify": "^17.0.1",
+    "sharp": "^0.34.5",
+    "uglify-js": "^3.19.3"
+  }
+}

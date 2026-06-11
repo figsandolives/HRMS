@@ -1,0 +1,8 @@
+{
+  "appId": "com.hrms.basma",
+  "appName": "HRMS Basma",
+  "webDir": "تطبيق البصمة",
+  "server": {
+    "androidScheme": "https"
+  }
+}

@@ -88,6 +88,7 @@ let fingerprintBarcodeCircle = null;
 let fingerprintBarcodeMapBound = false;
 let fingerprintBarcodeCoordinateTimer = null;
 let editingFingerprintBarcodeId = null;
+let quickEmployeeFillFile = null;
 const FINGERPRINT_MAP_DEFAULT_CENTER = {lat:29.342263, lng:48.018131};
 
 function saveData(options={}){
@@ -104,6 +105,30 @@ function collectionCount(value){
 
 function hasMeaningfulHrData(data=appData){
   return collectionCount(data.employees) > 0 || collectionCount(data.employers) > 0 || collectionCount(data.schedules) > 0;
+}
+
+function hasReadableHrDataShape(data){
+  if(!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  return [
+    'employees',
+    'employers',
+    'schedules',
+    'settings',
+    'reminders',
+    'fingerprintCodes',
+    'fingerprintPunches',
+    'fingerprintPlaces',
+    'books',
+    'decisions',
+    'schedulePdfHistory'
+  ].some(key=>Object.prototype.hasOwnProperty.call(data,key));
+}
+
+function canStartFreshInSelectedFolder(){
+  const settings = appData.settings || {};
+  const selectedAt = Date.parse(settings.folderSelectedAt || settings.freshFolderStartedAt || '');
+  const syncedAt = Date.parse(settings.lastFileSyncAt || '');
+  return !hasMeaningfulHrData() && Number.isFinite(selectedAt) && (!Number.isFinite(syncedAt) || selectedAt >= syncedAt);
 }
 
 function buildEmptyHrData(settings={}){
@@ -1577,9 +1602,13 @@ async function loadHrDataFromFolder(rootHandle){
   ]);
   if(fullDb){
     const data = fullDb.data?.data || fullDb.data;
+    if(hasReadableHrDataShape(data)){
+      if(hasMeaningfulHrData(data)) await hydrateImportedEmployeeFiles(rootHandle,data);
+      return {data, source:fullDb.path, found:true, readable:true, empty:!hasMeaningfulHrData(data)};
+    }
     if(hasMeaningfulHrData(data)){
       await hydrateImportedEmployeeFiles(rootHandle,data);
-      return {data, source:fullDb.path, found:true};
+      return {data, source:fullDb.path, found:true, readable:true, empty:false};
     }
   }
 
@@ -1671,10 +1700,25 @@ async function loadHrDataFromFolder(rootHandle){
     fingerprintPunches:fingerprintPunches?.data || [],
     fingerprintCodes:fingerprintCodes?.data || {}
   };
+  const hasStructuredFiles = Boolean(
+    employees ||
+    schedules ||
+    employers ||
+    reminders ||
+    settings ||
+    fingerprintPunches ||
+    fingerprintCodes ||
+    individualEmployees.items.length ||
+    individualSchedules.items.length
+  );
   if(hasMeaningfulHrData(reconstructed)){
     await hydrateImportedEmployeeFiles(rootHandle,reconstructed);
     const sources = [employees?.path, schedules?.path, employers?.path, individualEmployees.source, individualSchedules.source].filter(Boolean).join(' + ');
-    return {data:reconstructed, source:sources || 'ملفات قاعدة البيانات المنفصلة', found:true};
+    return {data:reconstructed, source:sources || 'ملفات قاعدة البيانات المنفصلة', found:true, readable:true, empty:false};
+  }
+  if(hasStructuredFiles && hasReadableHrDataShape(reconstructed)){
+    const sources = [employees?.path, schedules?.path, employers?.path, reminders?.path, settings?.path, fingerprintPunches?.path, fingerprintCodes?.path, individualEmployees.source, individualSchedules.source].filter(Boolean).join(' + ');
+    return {data:reconstructed, source:sources || 'ملفات قاعدة البيانات الفارغة', found:true, readable:true, empty:true};
   }
   return {data:null, source:fullDb?.path || '', found:Boolean(fullDb || employees || schedules || employers || individualEmployees.items.length || individualSchedules.items.length || await folderLooksLikeDatabase(rootHandle))};
 }
@@ -1700,8 +1744,7 @@ function getFolderTreeHtml(folderName='مجلد الحفظ'){
     `├─ القرارات والتعميمات/<br>`+
     `└─ جدول الدوامات/<br>`+
     days.map((day,i)=>`&nbsp;&nbsp;${i===days.length-1?'└':'├'}─ ${day}/<br>`+
-      `&nbsp;&nbsp;${i===days.length-1?'&nbsp;':'│'}&nbsp;&nbsp;├─ عربي/<br>`+
-      `&nbsp;&nbsp;${i===days.length-1?'&nbsp;':'│'}&nbsp;&nbsp;└─ الانجليزي/`).join('<br>');
+      `&nbsp;&nbsp;${i===days.length-1?'&nbsp;':'│'}&nbsp;&nbsp;└─ ملف PDF موحد: عربي + English`).join('<br>');
 }
 
 function setFolderStatus(message, type=''){
@@ -1823,10 +1866,12 @@ async function restoreSavedDirectoryHandle(){
       if(!hasMeaningfulHrData()){
         const imported = await tryImportDataFromFolder({silent:true, overwrite:false});
         if(imported.imported){
-          setFolderStatus(`تم تحميل بيانات المجلد تلقائياً: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
+          setFolderStatus(imported.empty
+            ? 'تم تحميل قاعدة بيانات فارغة من المجلد. جاهزة للبدء بالإضافة والمزامنة.'
+            : `تم تحميل بيانات المجلد تلقائياً: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
           return;
         }
-        if(imported.found){
+        if(imported.found && !imported.readable){
           setFolderStatus('المجلد يحتوي على ملفات قاعدة بيانات، لكن لم أستطع قراءة بيانات منها. لن تتم المزامنة حتى لا تُكتب أصفار فوق بياناتك.', 'error');
           return;
         }
@@ -1934,6 +1979,50 @@ const taskWordTranslations = {
   'ارشيف':'archive','أرشيف':'archive','الأرشيف':'archive','مهمة':'task','مهام':'tasks','عمل':'work'
 };
 
+const schedulePhraseTranslations = {
+  ...taskPhraseTranslations,
+  'ملاحظة':'Note',
+  'ملاحظات':'Notes',
+  'لا يوجد موظفون في هذا الفرع':'No employees in this branch',
+  'بدون مهام محددة':'No tasks specified',
+  'تصميم':'Design',
+  'مصمم':'Designer',
+  'ادارة حسابات التواصل':'Social media account management',
+  'إدارة حسابات التواصل':'Social media account management',
+  'التصوير':'Photography',
+  'تصوير':'Photography',
+  'مونتاج':'Video editing',
+  'تسويق':'Marketing',
+  'التسويق':'Marketing',
+  'خدمة زبائن':'Customer service',
+  'خدمة العملاء':'Customer service',
+  'عامل نظافة':'Cleaner',
+  'عامل تنظيف':'Cleaner',
+  'تحضير':'Preparation',
+  'تحضير الطلبات':'Order preparation',
+  'مراقبة الجودة':'Quality control',
+  'مدير فرع':'Branch manager',
+  'مساعد مدير':'Assistant manager',
+  'بصمة دخول':'Check-in punch',
+  'بصمة خروج':'Check-out punch',
+  'تأخير':'Late arrival',
+  'مغادرة مبكرة':'Early departure',
+  'إذن خروج':'Exit permission',
+  'اذن خروج':'Exit permission'
+};
+
+const scheduleWordTranslations = {
+  ...taskWordTranslations,
+  'ملاحظة':'note','ملاحظات':'notes','بدون':'without','محدد':'specified','محددة':'specified',
+  'تصميم':'design','مصمم':'designer','مصممة':'designer','تصوير':'photography','التصوير':'photography','مونتاج':'editing',
+  'تسويق':'marketing','التسويق':'marketing','اداري':'administrative','إداري':'administrative','ادارية':'administrative','إدارية':'administrative',
+  'مشرف':'supervisor','مشرفة':'supervisor','مدير':'manager','مديرة':'manager','مساعد':'assistant','مساعدة':'assistant',
+  'عامل':'worker','عاملة':'worker','تنظيف':'cleaning','نظافة':'cleaning','مطبخ':'kitchen','ادوات':'tools','أدوات':'tools',
+  'جودة':'quality','الجودة':'quality','مراقبة':'monitoring','حسابات':'accounts','التواصل':'communication','اجتماعي':'social','اجتماعيه':'social',
+  'دقائق':'minutes','دقيقة':'minute','ساعة':'hour','ساعات':'hours','دخول':'check-in','خروج':'check-out','تأخير':'late','مغادرة':'leaving','مبكرة':'early',
+  'اذن':'permission','إذن':'permission'
+};
+
 function stripArabicDiacritics(text){
   return String(text||'').replace(/[\u064B-\u065F\u0670]/g,'').replace(/[ـ]/g,'').trim();
 }
@@ -1968,18 +2057,31 @@ function employeeNameForPdf(name, lang='ar'){
 }
 
 function translateTaskToEnglish(task){
-  const normalized = stripArabicDiacritics(task);
+  return translateScheduleTextToEnglish(task);
+}
+
+function translateScheduleTextToEnglish(text){
+  const normalized = stripArabicDiacritics(text)
+    .replace(/[،؛]/g, ',')
+    .replace(/\s+/g,' ')
+    .trim();
   if(!normalized) return '';
-  if(!/[\u0600-\u06FF]/.test(normalized)) return normalized;
-  if(taskPhraseTranslations[normalized]) return taskPhraseTranslations[normalized];
+  if(!/[\u0600-\u06FF]/.test(normalized)) return titleCase(normalized);
+  if(schedulePhraseTranslations[normalized]) return schedulePhraseTranslations[normalized];
   let replaced = normalized;
-  Object.keys(taskPhraseTranslations)
+  Object.keys(schedulePhraseTranslations)
     .sort((a,b)=>b.length-a.length)
     .forEach(phrase=>{
-      if(replaced.includes(phrase)) replaced = replaced.replaceAll(phrase, taskPhraseTranslations[phrase]);
+      if(replaced.includes(phrase)) replaced = replaced.replaceAll(phrase, schedulePhraseTranslations[phrase]);
     });
   if(!/[\u0600-\u06FF]/.test(replaced)) return replaced;
-  return replaced.split(/\s+/).filter(Boolean).map(word=>taskWordTranslations[word] || transliterateArabicToEnglish(word).toLowerCase()).join(' ');
+  return replaced.split(/(\s+|,|\+|\/|-)/).map(part=>{
+    if(!part.trim() || /^[,\+\/-]$/.test(part)) return part;
+    const clean = part.replace(/[^\u0600-\u06FFA-Za-z0-9]/g,'');
+    if(scheduleWordTranslations[clean]) return part.replace(clean,scheduleWordTranslations[clean]);
+    if(/[\u0600-\u06FF]/.test(clean)) return part.replace(clean,transliterateArabicToEnglish(clean));
+    return part;
+  }).join('').replace(/\s+/g,' ').trim();
 }
 
 function tasksForPdf(tasks, lang='ar'){
@@ -2010,6 +2112,55 @@ function getScheduleEmployeeColor(empId){
 
 function getScheduleItemColor(item){
   return item?.color || getScheduleEmployeeColor(item?.empId || item?.empName);
+}
+
+function getScheduleEmployeesForNotes(schedule=scheduleState){
+  const fromSchedule = Object.values(schedule?.zones || {})
+    .flat()
+    .filter(Boolean)
+    .map(item=>({
+      id:item.empId || item.empName,
+      name:item.empName || 'موظف',
+      color:getScheduleItemColor(item)
+    }));
+  const map = new Map();
+  fromSchedule.forEach(emp=>{
+    if(emp.id && !map.has(emp.id)) map.set(emp.id,emp);
+  });
+  appData.employees.forEach(emp=>{
+    if(!map.has(emp.id)){
+      map.set(emp.id,{id:emp.id,name:emp.name || 'موظف',color:getScheduleEmployeeColor(emp.id)});
+    }
+  });
+  return [...map.values()];
+}
+
+function normalizeScheduleNotes(notes=[], schedule=scheduleState){
+  if(!Array.isArray(notes)) return [];
+  const employees = getScheduleEmployeesForNotes(schedule);
+  return notes
+    .map(note=>{
+      const text = String(note?.text || '').trim();
+      if(!text) return null;
+      const empId = note.empId || note.employeeId || '';
+      const linkedToEmployee = note.linkedToEmployee !== false && Boolean(empId || note.empName);
+      const employee = employees.find(emp=>emp.id === empId) || employees.find(emp=>emp.name === note.empName) || null;
+      const color = linkedToEmployee ? (note.color || employee?.color || getScheduleEmployeeColor(empId || note.empName || text)) : '#64748b';
+      return {
+        id:note.id || generateId(),
+        empId:linkedToEmployee ? (empId || employee?.id || '') : '',
+        empName:linkedToEmployee ? (note.empName || employee?.name || 'موظف') : '',
+        linkedToEmployee,
+        text,
+        color,
+        createdAt:note.createdAt || new Date().toISOString()
+      };
+    })
+    .filter(Boolean);
+}
+
+function scheduleNoteTextForPdf(note, lang='ar'){
+  return lang === 'en' ? translateScheduleTextToEnglish(note?.text || '') : (note?.text || '');
 }
 
 function hexToRgba(hex, alpha){
@@ -2059,19 +2210,23 @@ function resolveSchedulePdfRecord(dayKey, approvalDate=new Date()){
   if(current?.createdAt && approvalDate - new Date(current.createdAt) < twoDaysMs){
     record = {...current, updatedAt:approvalDate.toISOString()};
     if(!record.fileNames) record.fileNames = {};
-    if(!record.fileNames.ar) record.fileNames.ar = record.fileName || getSchedulePdfFileName(dayKey,new Date(record.createdAt || approvalDate),'ar');
-    if(!record.fileNames.en) record.fileNames.en = record.englishFileName || getSchedulePdfFileName(dayKey,new Date(record.createdAt || approvalDate),'en');
-    record.fileName = record.fileNames.ar;
-    record.englishFileName = record.fileNames.en;
+    const combinedName = record.fileNames.pdf || record.fileName || record.fileNames.ar || getSchedulePdfFileName(dayKey,new Date(record.createdAt || approvalDate),'ar');
+    record.fileNames.pdf = combinedName;
+    record.fileNames.ar = combinedName;
+    record.fileNames.en = combinedName;
+    record.fileName = combinedName;
+    record.englishFileName = combinedName;
     const idx = history.files.findIndex(file=>file.fileName === current.fileName);
     if(idx >= 0) history.files[idx] = record;
   } else {
+    const fileName = getSchedulePdfFileName(dayKey,approvalDate,'ar');
     record = {
-      fileName:getSchedulePdfFileName(dayKey,approvalDate,'ar'),
-      englishFileName:getSchedulePdfFileName(dayKey,approvalDate,'en'),
+      fileName,
+      englishFileName:fileName,
       fileNames:{
-        ar:getSchedulePdfFileName(dayKey,approvalDate,'ar'),
-        en:getSchedulePdfFileName(dayKey,approvalDate,'en')
+        pdf:fileName,
+        ar:fileName,
+        en:fileName
       },
       createdAt:approvalDate.toISOString(),
       updatedAt:approvalDate.toISOString()
@@ -2134,6 +2289,7 @@ function drawScheduleCanvasToJpegDataUrl(dayKey, schedule, title, lang='ar', app
   const isEn = lang === 'en';
   const width = 1600;
   const zones = ['surra','abulhasania','yarmouk'];
+  const notes = normalizeScheduleNotes(schedule?.notes || [], schedule);
   const maxCardsPerRow = 3;
   const cardH = 150;
   let height = 230;
@@ -2141,6 +2297,7 @@ function drawScheduleCanvasToJpegDataUrl(dayKey, schedule, title, lang='ar', app
     const count = Math.max(1,(schedule.zones?.[zone] || []).length);
     height += 92 + Math.ceil(count/maxCardsPerRow) * (cardH + 18) + 30;
   });
+  if(notes.length) height += 100 + (notes.length * 88);
   height = Math.max(1120,height);
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -2224,6 +2381,46 @@ function drawScheduleCanvasToJpegDataUrl(dayKey, schedule, title, lang='ar', app
     y += sectionH + 28;
   });
 
+  if(notes.length){
+    const sectionH = 72 + (notes.length * 84) + 22;
+    drawRoundRect(ctx,64,y,width-128,sectionH,18);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = '#dbe4ef';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    ctx.fillStyle = '#0f172a';
+    ctx.font = '900 32px Arial, sans-serif';
+    ctx.textAlign = isEn ? 'left' : 'right';
+    ctx.fillText(isEn ? 'Notes' : 'ملاحظات',isEn ? 92 : width-92,y+22);
+
+    let noteY = y + 72;
+    notes.forEach(note=>{
+      const color = note.color || getScheduleEmployeeColor(note.empId || note.empName);
+      const hasEmployeeLink = note.linkedToEmployee !== false && Boolean(note.empName);
+      drawRoundRect(ctx,92,noteY,width-184,66,12);
+      ctx.fillStyle = hexToRgba(color,.10);
+      ctx.fill();
+      ctx.strokeStyle = hexToRgba(color,.35);
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      drawRoundRect(ctx,isEn ? 108 : width-118,noteY+10,10,46,5);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.textAlign = isEn ? 'left' : 'right';
+      if(hasEmployeeLink){
+        ctx.fillStyle = color;
+        ctx.font = '900 20px Arial, sans-serif';
+        ctx.fillText(employeeNameForPdf(note.empName,lang),isEn ? 132 : width-132,noteY+10);
+      }
+      ctx.fillStyle = '#334155';
+      ctx.font = '700 18px Arial, sans-serif';
+      drawTextLines(ctx,scheduleNoteTextForPdf(note,lang),isEn ? 132 : width-132,hasEmployeeLink ? noteY+36 : noteY+20,width-288,24,2);
+      noteY += 84;
+    });
+  }
+
   return {
     dataUrl:canvas.toDataURL('image/jpeg',0.92),
     width,
@@ -2231,7 +2428,24 @@ function drawScheduleCanvasToJpegDataUrl(dayKey, schedule, title, lang='ar', app
   };
 }
 
-function buildPdfFromJpeg(jpegBytes, imageWidth, imageHeight){
+function getPdfImagePlacement(imageWidth, imageHeight, pageW=842, pageH=595){
+  const imgRatio = imageWidth / imageHeight;
+  const pageRatio = pageW / pageH;
+  let drawW = pageW;
+  let drawH = pageH;
+  let x = 0;
+  let y = 0;
+  if(imgRatio > pageRatio){
+    drawH = pageW / imgRatio;
+    y = (pageH - drawH) / 2;
+  } else {
+    drawW = pageH * imgRatio;
+    x = (pageW - drawW) / 2;
+  }
+  return {drawW,drawH,x,y};
+}
+
+function buildPdfFromJpegPages(pages){
   const encoder = new TextEncoder();
   const chunks = [];
   const offsets = [0];
@@ -2251,33 +2465,33 @@ function buildPdfFromJpeg(jpegBytes, imageWidth, imageHeight){
   };
   const pageW = 842;
   const pageH = 595;
-  const imgRatio = imageWidth / imageHeight;
-  const pageRatio = pageW / pageH;
-  let drawW = pageW;
-  let drawH = pageH;
-  let x = 0;
-  let y = 0;
-  if(imgRatio > pageRatio){
-    drawH = pageW / imgRatio;
-    y = (pageH - drawH) / 2;
-  } else {
-    drawW = pageH * imgRatio;
-    x = (pageW - drawW) / 2;
-  }
-  const content = `q\n${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm\n/Im0 Do\nQ`;
+  const pageItems = pages.map((page,index)=>{
+    const pageObj = 3 + (index * 3);
+    const imageObj = pageObj + 1;
+    const contentObj = pageObj + 2;
+    const {drawW,drawH,x,y} = getPdfImagePlacement(page.width,page.height,pageW,pageH);
+    const imageName = `Im${index}`;
+    const content = `q\n${drawW.toFixed(2)} 0 0 ${drawH.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm\n/${imageName} Do\nQ`;
+    return {...page,pageObj,imageObj,contentObj,imageName,content};
+  });
+  const totalObjects = 2 + (pageItems.length * 3);
   pushString('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
   beginObj(1); pushString('<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
-  beginObj(2); pushString('<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n');
-  beginObj(3); pushString(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`);
-  beginObj(4);
-  pushString(`<< /Type /XObject /Subtype /Image /Width ${imageWidth} /Height ${imageHeight} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.length} >>\nstream\n`);
-  pushBytes(jpegBytes);
-  pushString('\nendstream\nendobj\n');
-  beginObj(5); pushString(`<< /Length ${encoder.encode(content).length} >>\nstream\n${content}\nendstream\nendobj\n`);
+  beginObj(2); pushString(`<< /Type /Pages /Kids [${pageItems.map(page=>`${page.pageObj} 0 R`).join(' ')}] /Count ${pageItems.length} >>\nendobj\n`);
+  pageItems.forEach(page=>{
+    beginObj(page.pageObj);
+    pushString(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /XObject << /${page.imageName} ${page.imageObj} 0 R >> >> /Contents ${page.contentObj} 0 R >>\nendobj\n`);
+    beginObj(page.imageObj);
+    pushString(`<< /Type /XObject /Subtype /Image /Width ${page.width} /Height ${page.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${page.jpegBytes.length} >>\nstream\n`);
+    pushBytes(page.jpegBytes);
+    pushString('\nendstream\nendobj\n');
+    beginObj(page.contentObj);
+    pushString(`<< /Length ${encoder.encode(page.content).length} >>\nstream\n${page.content}\nendstream\nendobj\n`);
+  });
   const xrefOffset = length;
-  pushString('xref\n0 6\n0000000000 65535 f \n');
-  for(let i=1;i<=5;i++) pushString(`${String(offsets[i]).padStart(10,'0')} 00000 n \n`);
-  pushString(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
+  pushString(`xref\n0 ${totalObjects + 1}\n0000000000 65535 f \n`);
+  for(let i=1;i<=totalObjects;i++) pushString(`${String(offsets[i]).padStart(10,'0')} 00000 n \n`);
+  pushString(`trailer\n<< /Size ${totalObjects + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
   const out = new Uint8Array(length);
   let offset = 0;
   chunks.forEach(chunk=>{
@@ -2287,23 +2501,40 @@ function buildPdfFromJpeg(jpegBytes, imageWidth, imageHeight){
   return new Blob([out], {type:'application/pdf'});
 }
 
+function buildPdfFromJpeg(jpegBytes, imageWidth, imageHeight){
+  return buildPdfFromJpegPages([{jpegBytes,width:imageWidth,height:imageHeight}]);
+}
+
 async function createSchedulePdfBlob(dayKey, schedule, title, lang='ar', approvalDate=new Date()){
   const rendered = drawScheduleCanvasToJpegDataUrl(dayKey,schedule,title,lang,approvalDate);
   const jpegBytes = dataUrlToBytes(rendered.dataUrl);
   return buildPdfFromJpeg(jpegBytes,rendered.width,rendered.height);
 }
 
+async function createScheduleCombinedPdfBlob(dayKey, schedule, approvalDate=new Date()){
+  const titleDate = schedule?.scheduleDate ? parseDateInput(schedule.scheduleDate) : approvalDate;
+  const pages = ['ar','en'].map(lang=>{
+    const title = getScheduleTitle(dayKey,titleDate,lang);
+    const rendered = drawScheduleCanvasToJpegDataUrl(dayKey,schedule,title,lang,approvalDate);
+    return {
+      jpegBytes:dataUrlToBytes(rendered.dataUrl),
+      width:rendered.width,
+      height:rendered.height
+    };
+  });
+  return buildPdfFromJpegPages(pages);
+}
+
 async function writeSchedulePdf(rootHandle, dayKey, schedule, record, lang='ar'){
   const schedulesRoot = await getOrCreateDirectory(rootHandle,['جدول الدوامات']);
   const dayDir = await getOrCreateDirectory(schedulesRoot,[getSelectedDayName(dayKey)]);
-  const langDir = await getOrCreateDirectory(dayDir,[lang === 'en' ? 'الانجليزي' : 'عربي']);
   const approvalDate = new Date(record.updatedAt || record.createdAt || Date.now());
   const titleDate = schedule?.scheduleDate ? parseDateInput(schedule.scheduleDate) : approvalDate;
   const title = getScheduleTitle(dayKey,titleDate,lang);
   if(!record.fileNames) record.fileNames = {};
   const requestedName = record.fileNames[lang] || (lang === 'en' ? record.englishFileName : record.fileName) || getSchedulePdfFileName(dayKey,approvalDate,lang);
   const pdfBlob = await createSchedulePdfBlob(dayKey,schedule,title,lang,approvalDate);
-  const safeName = await writeFile(langDir,requestedName,pdfBlob);
+  const safeName = await writeFile(dayDir,requestedName,pdfBlob);
   record.fileNames[lang] = safeName;
   if(lang === 'ar') record.fileName = safeName;
   if(lang === 'en') record.englishFileName = safeName;
@@ -2311,9 +2542,22 @@ async function writeSchedulePdf(rootHandle, dayKey, schedule, record, lang='ar')
 }
 
 async function writeSchedulePdfPair(rootHandle, dayKey, schedule, record){
-  const ar = await writeSchedulePdf(rootHandle,dayKey,schedule,record,'ar');
-  const en = await writeSchedulePdf(rootHandle,dayKey,schedule,record,'en');
-  return {ar,en};
+  const schedulesRoot = await getOrCreateDirectory(rootHandle,['جدول الدوامات']);
+  const dayDir = await getOrCreateDirectory(schedulesRoot,[getSelectedDayName(dayKey)]);
+  const approvalDate = new Date(record.updatedAt || record.createdAt || Date.now());
+  if(!record.fileNames) record.fileNames = {};
+  const requestedName = record.fileNames.pdf || record.fileName || getSchedulePdfFileName(dayKey,approvalDate,'ar');
+  const pdfBlob = await createScheduleCombinedPdfBlob(dayKey,schedule,approvalDate);
+  const safeName = await writeFile(dayDir,requestedName,pdfBlob);
+  record.fileName = safeName;
+  record.englishFileName = safeName;
+  record.fileNames = {
+    ...(record.fileNames || {}),
+    pdf:safeName,
+    ar:safeName,
+    en:safeName
+  };
+  return {pdf:safeName, ar:safeName, en:safeName};
 }
 
 async function writeHrmsFilesToDirectory(rootHandle, syncedAt){
@@ -2329,9 +2573,7 @@ async function writeHrmsFilesToDirectory(rootHandle, syncedAt){
   await getOrCreateDirectory(rootHandle,['القرارات والتعميمات']);
   const visibleSchedulesRoot = await getOrCreateDirectory(rootHandle,['جدول الدوامات']);
   for(const dayName of days){
-    const dayDir = await getOrCreateDirectory(visibleSchedulesRoot,[dayName]);
-    await getOrCreateDirectory(dayDir,['عربي']);
-    await getOrCreateDirectory(dayDir,['الانجليزي']);
+    await getOrCreateDirectory(visibleSchedulesRoot,[dayName]);
   }
 
   const exportData = {
@@ -2426,7 +2668,7 @@ async function writeHrmsFilesToDirectory(rootHandle, syncedAt){
     const history = getPdfHistory(key);
     const record = history.current || resolveSchedulePdfRecord(key,new Date(schedule.approvedAt || syncedAt));
     await writeSchedulePdfPair(rootHandle,key,schedule,record);
-    pdfCount += 2;
+    pdfCount += 1;
   }
   await writeJsonFile(dbSchedulesDir,'سجل ملفات PDF.json',appData.schedulePdfHistory || {});
 
@@ -2457,6 +2699,17 @@ async function tryImportDataFromFolder({silent=false, overwrite=true}={}){
       return {imported:false, found:false, reason:'permission'};
     }
     const loaded = await loadHrDataFromFolder(selectedSaveDirectoryHandle);
+    if(loaded.data && hasReadableHrDataShape(loaded.data) && !hasMeaningfulHrData(loaded.data)){
+      if(!overwrite && hasMeaningfulHrData(appData)) return {imported:false, found:true, readable:true, empty:true, reason:'local-has-data'};
+      applyImportedHrData(loaded.data,'folder');
+      appData.settings.saveFolderName = selectedSaveDirectoryHandle.name;
+      appData.settings.importedAt = new Date().toISOString();
+      localStorage.setItem('hrmsData',JSON.stringify(appData));
+      renderFolderSettings();
+      setFolderStatus(`تم تجهيز قاعدة بيانات فارغة من ${loaded.source || 'المجلد المختار'}. يمكنك الآن البدء بالإضافة والمزامنة.`, 'success');
+      if(!silent) showToast('تم تجهيز قاعدة بيانات جديدة');
+      return {imported:true, found:true, readable:true, empty:true, reason:'empty-db', source:loaded.source};
+    }
     if(!loaded.data || !hasMeaningfulHrData(loaded.data)){
       if(!silent){
         if(loaded.found){
@@ -2467,7 +2720,7 @@ async function tryImportDataFromFolder({silent=false, overwrite=true}={}){
           showToast('المجلد جديد وجاهز للحفظ');
         }
       }
-      return {imported:false, found:loaded.found, reason:loaded.found ? 'unreadable' : 'empty'};
+      return {imported:false, found:loaded.found, readable:false, reason:loaded.found ? 'unreadable' : 'empty'};
     }
     if(!overwrite && hasMeaningfulHrData(appData)) return {imported:false, found:true, reason:'local-has-data'};
     applyImportedHrData(loaded.data,'folder');
@@ -2477,18 +2730,18 @@ async function tryImportDataFromFolder({silent=false, overwrite=true}={}){
     renderFolderSettings();
     setFolderStatus(`تم استيراد البيانات من ${loaded.source}: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
     if(!silent) showToast('تم استيراد البيانات من المجلد');
-    return {imported:true, found:true, reason:'imported', source:loaded.source};
+    return {imported:true, found:true, readable:true, empty:false, reason:'imported', source:loaded.source};
   } catch(err){
     if(err?.name === 'NotFoundError'){
       if(!silent) setFolderStatus('المجلد لا يحتوي على قاعدة بيانات سابقة. سيتم البدء كقاعدة جديدة.', 'success');
-      return {imported:false, found:false, reason:'empty'};
+      return {imported:false, found:false, readable:false, reason:'empty'};
     }
     console.error(err);
     if(!silent){
       setFolderStatus('تعذر استيراد البيانات. تأكد أن المجلد يحتوي على قاعدة البيانات/قاعدة البيانات الكاملة.json', 'error');
       showToast('فشل استيراد البيانات','error');
     }
-    return {imported:false, found:true, reason:'error', error:err};
+    return {imported:false, found:true, readable:false, reason:'error', error:err};
   }
 }
 
@@ -2505,14 +2758,23 @@ async function syncDataToFolder(userTriggered=false){
   if(userTriggered && !hasMeaningfulHrData()){
     const imported = await tryImportDataFromFolder({silent:true, overwrite:false});
     if(imported.imported){
-      setFolderStatus(`تم تحميل بيانات المجلد تلقائياً: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
-      showToast('تم تحميل البيانات من المجلد');
-      return;
+      if(imported.empty){
+        setFolderStatus('قاعدة البيانات في المجلد فارغة وجاهزة. جاري تثبيت ملفات البداية...', 'warn');
+      } else {
+        setFolderStatus(`تم تحميل بيانات المجلد تلقائياً: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
+        showToast('تم تحميل البيانات من المجلد');
+        return;
+      }
     }
-    if(imported.found){
-      setFolderStatus('المجلد يحتوي على ملفات قاعدة بيانات، لكن لم أستطع قراءة بيانات منها. تم إيقاف المزامنة حتى لا تُكتب أصفار فوق بياناتك.', 'error');
-      showToast('تم إيقاف المزامنة لحماية البيانات','error');
-      return;
+    if(imported.found && !imported.readable){
+      if(canStartFreshInSelectedFolder()){
+        resetToFreshFolderDatabase(selectedSaveDirectoryHandle.name);
+        setFolderStatus('تم اعتبار هذا المجلد بداية جديدة. جاري إنشاء ملفات قاعدة البيانات...', 'warn');
+      } else {
+        setFolderStatus('المجلد يحتوي على ملفات قاعدة بيانات، لكن لم أستطع قراءة بيانات منها. تم إيقاف المزامنة حتى لا تُكتب أصفار فوق بياناتك.', 'error');
+        showToast('تم إيقاف المزامنة لحماية البيانات','error');
+        return;
+      }
     }
   }
   if(folderSyncRunning){
@@ -2866,8 +3128,611 @@ function renderSegmentsList(){
 
 function removeSegment(i){ empSegments.splice(i,1); updateHoursBar(); renderSegmentsList(); }
 
+function openQuickEmployeeFillModal(){
+  quickEmployeeFillFile = null;
+  document.getElementById('quickFillImage').value = '';
+  document.getElementById('quickFillPreview').innerHTML = '';
+  document.getElementById('quickFillPreview').classList.remove('show');
+  document.getElementById('quickFillUploadPanel').style.display = 'block';
+  document.getElementById('quickFillAnalysisPanel').classList.remove('show');
+  setQuickFillProgress(0,'جاري تجهيز محرك القراءة');
+  openModal('quickFillModal');
+}
+
+function closeQuickEmployeeFillModal(){
+  quickEmployeeFillFile = null;
+  closeModal('quickFillModal');
+}
+
+function handleQuickFillImageChange(input){
+  const file = input.files?.[0];
+  quickEmployeeFillFile = file || null;
+  const preview = document.getElementById('quickFillPreview');
+  preview.innerHTML = '';
+  preview.classList.remove('show');
+  if(!file) return;
+  const url = URL.createObjectURL(file);
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = 'معاينة البطاقة';
+  img.onload = ()=>URL.revokeObjectURL(url);
+  preview.appendChild(img);
+  preview.classList.add('show');
+}
+
+function setQuickFillProgress(percent=0, text=''){
+  const bar = document.getElementById('quickFillProgressBar');
+  const label = document.getElementById('quickFillAnalysisText');
+  if(bar) bar.style.width = `${Math.max(0,Math.min(100,percent))}%`;
+  if(label && text) label.textContent = text;
+}
+
+function loadTesseractOcr(){
+  if(window.Tesseract?.recognize) return Promise.resolve(window.Tesseract);
+  if(window.__hrmsTesseractPromise) return window.__hrmsTesseractPromise;
+  window.__hrmsTesseractPromise = new Promise((resolve,reject)=>{
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    script.onload = ()=>window.Tesseract?.recognize ? resolve(window.Tesseract) : reject(new Error('لم يتم تحميل محرك القراءة'));
+    script.onerror = ()=>reject(new Error('تعذر تحميل محرك قراءة البطاقة'));
+    document.head.appendChild(script);
+  });
+  return window.__hrmsTesseractPromise;
+}
+
+function normalizeOcrLine(line){
+  return normalizeDigits(line)
+    .replace(/[|]/g,' ')
+    .replace(/[ـ]+/g,'')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+function cleanExtractedField(value){
+  return normalizeOcrLine(value)
+    .replace(/^[\s:：\-–—]+|[\s:：\-–—]+$/g,'')
+    .replace(/(?:Name|Civil ID No|Passport No|Nationality|Sex|Birth Date|Expiry Date|الاسم|الإسم|الرقم\s*المدني|رقم\s*الجواز|الجنسية|الجنس|تاريخ\s*الميلاد|تاريخ\s*الانتهاء|المهن[ةه])\s*[:：-]?\s*/gi,'')
+    .replace(/\s*[:：-]\s*(?:Name|Civil ID No|Passport No|Nationality|Sex|Birth Date|Expiry Date|الاسم|الإسم|الرقم\s*المدني|رقم\s*الجواز|الجنسية|الجنس|تاريخ\s*الميلاد|تاريخ\s*الانتهاء|المهن[ةه])/gi,'')
+    .trim();
+}
+
+function titleCaseLatinName(value){
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\b[a-z]/g, ch=>ch.toUpperCase())
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+function extractCivilIdFromText(text){
+  const normalized = normalizeDigits(text);
+  const labeled = normalized.match(/(?:Civil\s*ID\s*No|الرقم\s*المدني)\D*(\d{12})/i);
+  if(labeled) return labeled[1];
+  const any = normalized.match(/\b\d{12}\b/);
+  return any ? any[0] : '';
+}
+
+function getArabicTextOnly(value){
+  const stopWords = new Set([
+    'دولة','الكويت','البطاقة','المدنية','المدني','الرقم','الاسم','الإسم','الجنسية','الجنس',
+    'تاريخ','الميلاد','الانتهاء','الجواز','المهنة','المهنه','العنوان','الوحدة','قطعة','قطعه',
+    'القطعة','القطعه','شارع','المبنى','الدور','المسلسل','فصيلة','الدم','ذكر','انثى','أنثى'
+  ]);
+  return normalizeOcrLine(value)
+    .replace(/[A-Za-z0-9<>.,;:()[\]{}'"“”‘’؟!@#$%^&*_+=|\\/~-]/g,' ')
+    .replace(/[^\u0600-\u06FF\s]/g,' ')
+    .replace(/\s+/g,' ')
+    .trim()
+    .split(/\s+/)
+    .filter(word=>word && !stopWords.has(word))
+    .join(' ');
+}
+
+function hasCivilIdLabelNoise(value){
+  return /(الرقم|المدني|الاسم|الإسم|الجنسية|الجنس|تاريخ|الجواز|المهن[ةه]|العنوان|الوحدة|قطعة|قطعه|شارع|المبنى|الدور|المسلسل|Civil|Name|Passport|Nationality|Birth|Expiry|Sex)/i.test(normalizeOcrLine(value));
+}
+
+function hasSuspiciousArabicNameNoise(value){
+  return /(مشاركة|مساركة|مصراكة|افاكيو|أفاكيو|اكيوه|أكيوه|رمز|باركود|تحقق|شاشة|هويتي|بطاقة|مدنية|خدمة|مباشر|محادثة|جوجل|Gemini|Live)/i.test(normalizeOcrLine(value));
+}
+
+function isLikelyArabicPersonName(value, options={}){
+  const text = getArabicTextOnly(value);
+  if(!text) return false;
+  const words = text.split(/\s+/).filter(Boolean);
+  const minWords = Number(options.minWords || 2);
+  if(words.length < minWords || words.length > 6) return false;
+  if(hasSuspiciousArabicNameNoise(text)) return false;
+  if(/(مطعم|شركة|مؤسسة|فرع|محل|مدرسة|مكتب|مركز|وزارة|عامل|سائق|مندوب|مطبخ|تنظيف|أدوات|ادوات|العنوان|عنوان|الوحدة|قطعة|قطعه|القطعة|القطعه|القطه|شارع|المبنى|الدور|السالمية|السالميه|سالمية|سالميه|الساحلية|الساحليه|الرقم|المدني|الاسم|الجنسية)/.test(text)) return false;
+  return words.every(word=>word.length >= 2);
+}
+
+function cleanArabicNameCandidate(line){
+  return getArabicTextOnly(line)
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+function getArabicNameCandidateFromLine(line){
+  return cleanArabicNameCandidate(
+    cleanExtractedField(line)
+      .replace(/\b\d{12}\b/g,' ')
+      .replace(/(?:Civil\s*ID\s*No|Name|Passport\s*No|Nationality|Sex|Birth\s*Date|Expiry\s*Date)\s*[:：-]?\s*/ig,' ')
+      .replace(/(?:الرقم\s*المدني|المدني|الاسم|الإسم)\s*[:：-]?\s*/ig,' ')
+  );
+}
+
+function pickBestArabicNameCandidate(lines, anchorIndex=-1){
+  let best = '';
+  let bestScore = 0;
+  lines.forEach((line,index)=>{
+    const candidate = getArabicNameCandidateFromLine(line);
+    if(!isLikelyArabicPersonName(candidate,{minWords:3})) return;
+    const wordsCount = candidate.split(/\s+/).filter(Boolean).length;
+    let score = wordsCount >= 3 ? 6 : 4;
+    const normalized = normalizeOcrLine(line);
+    if(/الاسم|الإسم/i.test(normalized)) score += 4;
+    if(/\b\d{12}\b|Civil\s*ID/i.test(normalized)) score += 2;
+    if(anchorIndex >= 0){
+      const distance = Math.abs(index - anchorIndex);
+      score += Math.max(0, 4 - distance);
+      if(index > anchorIndex) score += 1;
+    }
+    if(/[A-Za-z]{4,}/.test(normalized)) score -= 1;
+    if(score > bestScore){
+      best = candidate;
+      bestScore = score;
+    }
+  });
+  return best;
+}
+
+function extractArabicNameFromCivilIdLines(lines, allowLoose=false){
+  const civilIndex = lines.findIndex(line=>/(Civil\s*ID|\b\d{12}\b)/i.test(line));
+  if(civilIndex >= 0){
+    const nearCivilStart = Math.max(0,civilIndex - 2);
+    const nearCivilLines = lines.slice(nearCivilStart, Math.min(lines.length, civilIndex + 7));
+    const nearCivilName = pickBestArabicNameCandidate(nearCivilLines, civilIndex - nearCivilStart);
+    if(nearCivilName) return nearCivilName;
+
+    const civilLineParts = normalizeOcrLine(lines[civilIndex]).split(/\d{12}/);
+    const sameLineCandidate = getArabicNameCandidateFromLine(civilLineParts.slice(1).join(' '));
+    if(sameLineCandidate && !hasCivilIdLabelNoise(sameLineCandidate) && isLikelyArabicPersonName(sameLineCandidate,{minWords:3})) return sameLineCandidate;
+
+    for(let i=civilIndex + 1; i<Math.min(lines.length, civilIndex + 5); i++){
+      if(/\bName\b|Passport|Nationality|Sex|Birth|Expiry/i.test(lines[i])) break;
+      const candidate = getArabicNameCandidateFromLine(lines[i]);
+      if(isLikelyArabicPersonName(candidate,{minWords:3})) return candidate;
+      if(hasCivilIdLabelNoise(lines[i])) continue;
+    }
+  }
+
+  const labelIndex = lines.findIndex(line=>/الاسم/.test(line));
+  if(labelIndex >= 0){
+    const scanIndexes = [labelIndex, labelIndex - 1, labelIndex + 1, labelIndex - 2, labelIndex + 2]
+      .filter(i=>i >= 0 && i < lines.length);
+    const labelWindowName = pickBestArabicNameCandidate(scanIndexes.map(i=>lines[i]), scanIndexes.indexOf(labelIndex));
+    if(labelWindowName) return labelWindowName;
+    for(const i of scanIndexes){
+      const rawLine = i === labelIndex ? cleanExtractedField(lines[i]) : lines[i];
+      if(i !== labelIndex && hasCivilIdLabelNoise(rawLine) && i !== labelIndex + 1 && i !== labelIndex - 1) continue;
+      const candidate = getArabicNameCandidateFromLine(rawLine);
+      if(isLikelyArabicPersonName(candidate,{minWords:3})) return candidate;
+    }
+  }
+
+  if(!allowLoose) return '';
+  for(const line of lines){
+    const candidate = getArabicNameCandidateFromLine(line);
+    if(isLikelyArabicPersonName(candidate,{minWords:3})) return candidate;
+    if(hasCivilIdLabelNoise(line)) continue;
+  }
+  return '';
+}
+
+function extractNameFromCivilIdText(text, lines, options={}){
+  const arabicName = extractArabicNameFromCivilIdLines(lines, Boolean(options.allowLooseArabicName));
+  if(arabicName) return arabicName;
+
+  const nameLineIndex = lines.findIndex(line=>/^Name\b/i.test(line));
+  if(nameLineIndex >= 0){
+    const sameLine = cleanExtractedField(lines[nameLineIndex].replace(/^Name\b/i,''));
+    const candidate = sameLine || cleanExtractedField(lines[nameLineIndex + 1] || '');
+    const latin = candidate.match(/[A-Z][A-Z\s.'-]{4,}/i);
+    if(latin) return titleCaseLatinName(latin[0]);
+  }
+  const inlineName = text.match(/\bName\s+([A-Z][A-Z\s.'-]{4,})(?=\s+(?:Passport|Nationality|Sex|Birth|Expiry|Civil|$))/i);
+  if(inlineName) return titleCaseLatinName(inlineName[1]);
+  const mrzLine = lines.find(line=>/[A-Z<]{10,}/.test(line) && line.includes('<<') && !line.startsWith('ID'));
+  if(mrzLine){
+    const parts = mrzLine.replace(/[^A-Z<]/g,'').split('<<').filter(Boolean);
+    if(parts.length >= 2){
+      const surname = parts[0].replace(/</g,' ').trim();
+      const given = parts[1].replace(/</g,' ').trim();
+      return titleCaseLatinName(`${given} ${surname}`);
+    }
+  }
+  return '';
+}
+
+function extractNationalityFromCivilIdText(text, lines){
+  const codeMap = {
+    KWT:'KW', KW:'KW', PHL:'PH', PH:'PH', IND:'IN', IN:'IN', BGD:'BD', BD:'BD',
+    PAK:'PK', PK:'PK', LKA:'LK', LK:'LK', NPL:'NP', NP:'NP', EGY:'EG', EG:'EG',
+    JOR:'JO', JO:'JO', SYR:'SY', LB:'LB', LBN:'LB', IRQ:'IQ', IRN:'IR', YEM:'YE',
+    SAU:'SA', UAE:'AE', ARE:'AE', BHR:'BH', QAT:'QA', OMN:'OM', SDN:'SD',
+    ETH:'ET', KEN:'KE', NGA:'NG', UGA:'UG', MAR:'MA', TUN:'TN', DZA:'DZ', TUR:'TR'
+  };
+  const wordMap = [
+    [/فلب/i,'PH'], [/هند/i,'IN'], [/بنغل/i,'BD'], [/باك/i,'PK'], [/سريلان/i,'LK'],
+    [/نيبال/i,'NP'], [/كويت/i,'KW'], [/مصر/i,'EG'], [/اردن|أردن/i,'JO'],
+    [/سور/i,'SY'], [/لبنان/i,'LB'], [/عراق/i,'IQ'], [/ايران|إيران/i,'IR'],
+    [/يمن/i,'YE'], [/سعود/i,'SA'], [/امارات|إمارات/i,'AE'], [/بحرين/i,'BH'],
+    [/قطر/i,'QA'], [/عمان|عُمان/i,'OM']
+  ];
+  const nationalityLine = lines.find(line=>/(Nationality|الجنسية)/i.test(line)) || '';
+  const codeCandidates = (nationalityLine.match(/\b[A-Z]{2,3}\b/g) || []).concat(text.match(/\b[A-Z]{3}\b/g) || []);
+  for(const code of codeCandidates){
+    if(codeMap[code] && countries.some(country=>country.code === codeMap[code])) return codeMap[code];
+  }
+  for(const [pattern,code] of wordMap){
+    if(pattern.test(nationalityLine) || pattern.test(text)) return code;
+  }
+  return '';
+}
+
+function isLikelyEmployerLine(line){
+  const text = cleanJobOrEmployerLine(line);
+  if(!text || text.length < 3) return false;
+  if(/(العنوان|الوحدة|قطعة|قطعه|القطعة|القطعه|شارع|المبنى|الدور|المسلسل|Serial|IDKWT|Civil|Passport|Nationality|Sex|Birth|Expiry|Name|الرقم|الجنسية|الجنس|تاريخ|الجواز|فصيلة|الدم|المهن[ةه]|عامل|مندوب|سائق|محاسب|مدير|مطبخ|تنظيف|طباخ|كاشير|بائع|مشرف)/i.test(text)) return false;
+  if(/^\d+$/.test(text)) return false;
+  return /[\u0600-\u06FF]/.test(text) && text.split(/\s+/).length >= 2;
+}
+
+function extractValueFromOcrLabelLine(line, labelPattern){
+  const normalized = normalizeOcrLine(line);
+  labelPattern.lastIndex = 0;
+  if(!labelPattern.test(normalized)) return '';
+  labelPattern.lastIndex = 0;
+  return cleanExtractedField(normalized.replace(labelPattern,' '));
+}
+
+function findKnownEmployerInText(text){
+  const normalizedText = normalizeCompareText(text);
+  const employers = appData?.employers || [];
+  const found = employers.find(employer=>{
+    const name = normalizeCompareText(employer.name);
+    return name && (normalizedText.includes(name) || name.includes(normalizedText));
+  });
+  return found?.name || '';
+}
+
+function cleanJobOrEmployerLine(line){
+  return cleanExtractedField(line)
+    .replace(/\b\d{6,}\b/g,' ')
+    .replace(/(?:المهن[ةه]|Profession|Occupation)\s*[:：-]?\s*/ig,' ')
+    .replace(/(?:الرقم\s*المدني|Civil\s*ID\s*No)\s*[:：-]?\s*/ig,' ')
+    .replace(/^[^\u0600-\u06FFA-Za-z]+/,'')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+function isLikelyJobPositionLine(line){
+  const text = cleanJobOrEmployerLine(line);
+  if(!text || text.length < 3) return false;
+  if(/(العنوان|الوحدة|قطعة|شارع|المبنى|الدور|المسلسل|الرقم|الجنسية|الجنس|تاريخ|الجواز|مطعم|شركة|مؤسسة|مكتب|محل|فرع|مدرسة|مركز|وزارة)/.test(text)) return false;
+  return /(عامل|مندوب|سائق|محاسب|مدير|مطبخ|تنظيف|طباخ|كاشير|بائع|مشرف|حارس|فني|مساعد|نادل|موظف|مبيعات|أدوات|ادوات)/.test(text);
+}
+
+function extractJobPhraseFromText(text){
+  const normalized = cleanJobOrEmployerLine(text).replace(/[،,]+/g,' ');
+  const match = normalized.match(/((?:عامل|مندوب|سائق|محاسب|مدير|مساعد|مشرف|حارس|فني|نادل|طباخ|كاشير|بائع|موظف)[\u0600-\u06FF\s/]+?)(?=\s*(?:مطعم|شركة|مؤسسة|مكتب|محل|فرع|مدرسة|مركز|وزارة|العنوان|الوحدة|قطعة|قطعه|القطعة|القطعه|شارع|المبنى|الدور|المسلسل|\d{2,}|$))/);
+  return match ? cleanJobOrEmployerLine(match[1]) : '';
+}
+
+function cleanJobPositionValue(value){
+  const phrase = extractJobPhraseFromText(value);
+  if(phrase) return phrase;
+  return cleanJobOrEmployerLine(value)
+    .replace(/[©®™|]+/g,' ')
+    .replace(/\b\d{1,3}\b.*$/,'')
+    .replace(/[A-Za-z]+.*$/,'')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+function extractEmployerPhraseFromText(text){
+  const normalized = cleanJobOrEmployerLine(text).replace(/[،,]+/g,' ');
+  const match = normalized.match(/((?:مطعم|شركة|مؤسسة|مكتب|محل|فرع|مدرسة|مركز|وزارة)[\u0600-\u06FF\s]+?)(?=\s*(?:العنوان|الوحدة|قطعة|قطعه|القطعة|القطعه|شارع|المبنى|الدور|المسلسل|Serial|الرقم|الجنسية|الجنس|تاريخ|$))/);
+  const candidate = match ? cleanJobOrEmployerLine(match[1]) : '';
+  return isLikelyEmployerLine(candidate) ? candidate : '';
+}
+
+function isUsableExtractedEmployerName(value){
+  const text = cleanJobOrEmployerLine(value);
+  if(!text || text.length < 3) return false;
+  if(/(العنوان|الوحدة|قطعة|قطعه|القطعة|القطعه|شارع|المبنى|الدور|المسلسل|الرقم|الجنسية|الجنس|تاريخ|الجواز|فصيلة|الدم)/.test(text)) return false;
+  return /(مطعم|شركة|مؤسسة|مكتب|محل|فرع|مدرسة|مركز|وزارة)/.test(text) || isLikelyEmployerLine(text);
+}
+
+function extractPositionAndEmployerFromCombinedText(text){
+  const result = {position:'', employer:''};
+  const normalized = String(text || '')
+    .split(/\r?\n/)
+    .map(normalizeOcrLine)
+    .filter(Boolean)
+    .join('\n');
+  result.position = extractJobPhraseFromText(normalized);
+  result.employer = extractEmployerPhraseFromText(normalized);
+  const match = normalized.match(/(?:المهن[ةه]|Profession|Occupation)\s*[:：\-]?\s*([^\n\r]+)(?:\n+([^\n\r]+))?/i);
+  if(!match) return result;
+  let position = cleanExtractedField(match[1] || '');
+  let employer = cleanExtractedField(match[2] || '');
+  const inlineEmployer = position.match(/^(.*?)(\b(?:مطعم|شركة|مؤسسة|مكتب|محل|فرع|مدرسة|مركز|وزارة)\b.+)$/);
+  if(inlineEmployer && inlineEmployer[1].trim().length >= 3){
+    position = inlineEmployer[1].trim();
+    employer = inlineEmployer[2].trim();
+  }
+  employer = employer.replace(/\s*(?:العنوان|الوحدة|قطعة|شارع|المبنى|الدور).*$/,'').trim();
+  result.position = cleanJobPositionValue(position) || result.position;
+  result.employer = extractEmployerPhraseFromText(employer) || employer || result.employer;
+  return result;
+}
+
+function extractPositionAndEmployerFromCivilIdText(lines){
+  const result = {position:'', employer:''};
+  const jobIndex = lines.findIndex(line=>/(المهن[ةه]|Profession|Occupation)/i.test(line));
+  const guessedJobIndex = jobIndex >= 0 ? jobIndex : lines.findIndex(isLikelyJobPositionLine);
+  if(guessedJobIndex < 0) return result;
+  const jobLine = lines[guessedJobIndex];
+  let position = jobIndex >= 0 ? extractValueFromOcrLabelLine(jobLine, /المهن[ةه]|Profession|Occupation/ig) : cleanJobOrEmployerLine(jobLine);
+  if(!position || position.length < 3) position = cleanJobOrEmployerLine(lines[guessedJobIndex + 1] || '');
+  position = position
+    .replace(/^\s*[:：-]+|[:：-]+\s*$/g,'')
+    .replace(/\s+/g,' ')
+    .trim();
+  const combinedEmployer = position.match(/^(.*?)(\b(?:مطعم|شركة|مؤسسة|مكتب|محل|فرع|مدرسة|مركز|وزارة)\b.+)$/);
+  if(combinedEmployer && combinedEmployer[1].trim().length >= 3){
+    position = combinedEmployer[1].trim();
+    result.employer = combinedEmployer[2].trim();
+  }
+  result.position = cleanJobPositionValue(position);
+  for(let i=guessedJobIndex + 1; i<Math.min(lines.length, guessedJobIndex + 6); i++){
+    const candidate = cleanJobOrEmployerLine(lines[i]);
+    if(candidate === result.position) continue;
+    if(isLikelyEmployerLine(candidate)){
+      result.employer = candidate;
+      break;
+    }
+  }
+  return result;
+}
+
+function parseCivilIdCardText(text, options={}){
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map(normalizeOcrLine)
+    .filter(Boolean);
+  const combinedJob = extractPositionAndEmployerFromCombinedText(text);
+  const lineJob = extractPositionAndEmployerFromCivilIdText(lines);
+  const data = {
+    name:options.skipName ? '' : extractNameFromCivilIdText(text,lines,options),
+    civilId:extractCivilIdFromText(text),
+    nationality:extractNationalityFromCivilIdText(text,lines),
+    position:lineJob.position || combinedJob.position,
+    employer:lineJob.employer || combinedJob.employer || findKnownEmployerInText(text)
+  };
+  if(options.only === 'name') return {name:data.name,civilId:'',nationality:'',position:'',employer:''};
+  if(options.only === 'job') return {name:'',civilId:'',nationality:'',position:data.position,employer:data.employer};
+  return data;
+}
+
+function normalizeCompareText(value){
+  return normalizeOcrLine(value).replace(/\s+/g,'').toLowerCase();
+}
+
+function setEmployeeEmployerFromQuickFill(employerName){
+  const name = cleanExtractedField(employerName);
+  if(!name) return;
+  const select = document.getElementById('empEmployer');
+  const normalizedName = normalizeCompareText(name);
+  const found = appData.employers.find(employer=>{
+    const employerName = normalizeCompareText(employer.name);
+    return employerName === normalizedName || employerName.includes(normalizedName) || normalizedName.includes(employerName);
+  });
+  if(found){
+    select.value = found.name;
+    return;
+  }
+  let option = [...select.options].find(opt=>normalizeCompareText(opt.value) === normalizeCompareText(name));
+  if(!option){
+    option = document.createElement('option');
+    option.value = name;
+    option.textContent = `${name} (من البطاقة)`;
+    select.appendChild(option);
+  }
+  select.value = name;
+}
+
+function fillEmployeeFormFromQuickData(data){
+  ['empName','empCivilId','empPosition','empEmployer','empNationality'].forEach(id=>{
+    const input = document.getElementById(id);
+    if(input) input.value = '';
+  });
+  if(data.name && isLikelyArabicPersonName(data.name,{minWords:3})) document.getElementById('empName').value = data.name;
+  if(data.civilId) document.getElementById('empCivilId').value = data.civilId;
+  if(data.nationality) document.getElementById('empNationality').value = data.nationality;
+  if(data.position && isLikelyJobPositionLine(data.position)) document.getElementById('empPosition').value = cleanJobPositionValue(data.position);
+  if(data.employer && isUsableExtractedEmployerName(data.employer)) setEmployeeEmployerFromQuickFill(data.employer);
+}
+
+function isUsableExtractedEmployeeName(value){
+  const text = normalizeOcrLine(value);
+  if(!text || /^(?:الرقم|الرقم المدني|المدني|الاسم|الإسم|الجنسية|المهن[ةه])$/i.test(text)) return false;
+  if(/[\u0600-\u06FF]/.test(text)) return isLikelyArabicPersonName(text,{minWords:3});
+  return /^[A-Za-z][A-Za-z\s.'-]{4,}$/.test(text) && text.trim().split(/\s+/).length >= 2;
+}
+
+function mergeQuickFillParsedData(parsedItems){
+  const merged = {name:'', civilId:'', nationality:'', position:'', employer:''};
+  parsedItems.filter(Boolean).forEach(item=>{
+    const itemNameIsArabic = isLikelyArabicPersonName(item.name,{minWords:3});
+    const mergedNameIsArabic = isLikelyArabicPersonName(merged.name,{minWords:3});
+    if(item.name && isUsableExtractedEmployeeName(item.name) && (!merged.name || (itemNameIsArabic && !mergedNameIsArabic))){
+      merged.name = item.name;
+    }
+    if(!merged.civilId && item.civilId) merged.civilId = item.civilId;
+    if(!merged.nationality && item.nationality) merged.nationality = item.nationality;
+    if(!merged.position && item.position && isLikelyJobPositionLine(item.position)) merged.position = cleanJobPositionValue(item.position);
+    if(!merged.employer && item.employer && isUsableExtractedEmployerName(item.employer)) merged.employer = cleanJobOrEmployerLine(item.employer);
+  });
+  if(!isLikelyArabicPersonName(merged.name,{minWords:3})) merged.name = '';
+  return merged;
+}
+
+function quickFillNeedsExtraReading(parsed){
+  return !parsed.position || !parsed.employer || !isUsableExtractedEmployeeName(parsed.name);
+}
+
+function loadImageElementFromFile(file){
+  return new Promise((resolve,reject)=>{
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = ()=>{
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = ()=>{
+      URL.revokeObjectURL(url);
+      reject(new Error('تعذر تجهيز الصورة للقراءة'));
+    };
+    img.src = url;
+  });
+}
+
+function createQuickFillOcrCanvas(img, region, scale=2.5){
+  const sourceWidth = Math.max(1, Math.round(region.width));
+  const sourceHeight = Math.max(1, Math.round(region.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(sourceWidth * scale);
+  canvas.height = Math.round(sourceHeight * scale);
+  const ctx = canvas.getContext('2d', {willReadFrequently:true});
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, region.x, region.y, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+  const imageData = ctx.getImageData(0,0,canvas.width,canvas.height);
+  const data = imageData.data;
+  for(let i=0;i<data.length;i+=4){
+    let gray = data[i]*0.299 + data[i+1]*0.587 + data[i+2]*0.114;
+    gray = Math.max(0, Math.min(255, (gray - 128) * 1.45 + 128));
+    data[i] = data[i+1] = data[i+2] = gray;
+  }
+  ctx.putImageData(imageData,0,0);
+  return canvas;
+}
+
+async function buildQuickFillExtraOcrTargets(file){
+  const img = await loadImageElementFromFile(file);
+  const width = img.naturalWidth || img.width;
+  const height = img.naturalHeight || img.height;
+  const makeRegion = (label, x, y, w, h, scale, field='all', ocr={})=>({
+    label,
+    field,
+    ...ocr,
+    source:createQuickFillOcrCanvas(img,{
+      x:Math.max(0, Math.round(width * x)),
+      y:Math.max(0, Math.round(height * y)),
+      width:Math.min(width - Math.round(width * x), Math.round(width * w)),
+      height:Math.min(height - Math.round(height * y), Math.round(height * h))
+    }, scale)
+  });
+  return [
+    makeRegion('قراءة سطر الاسم العربي المركز', .32, .245, .58, .065, 7.0, 'name', {lang:'ara', psm:'7'}),
+    makeRegion('قراءة الاسم العربي فقط', .25, .20, .66, .16, 5.2, 'name', {lang:'ara', psm:'6'}),
+    makeRegion('قراءة منطقة الرقم والاسم', .18, .15, .78, .26, 4.2, 'name', {lang:'ara+eng', psm:'6'}),
+    makeRegion('قراءة منتصف واجهة البطاقة', .28, .23, .67, .20, 4.8, 'name', {lang:'ara', psm:'6'}),
+    makeRegion('قراءة بيانات واجهة البطاقة', .02, .17, .96, .31, 3.2, 'front'),
+    makeRegion('قراءة المهنة وجهة العمل فقط', .44, .49, .55, .17, 4.8, 'job'),
+    makeRegion('قراءة ظهر البطاقة', .02, .48, .96, .35, 3.4, 'job')
+  ];
+}
+
+async function recognizeQuickFillTarget(Tesseract, source, label, fromPercent, toPercent, options={}){
+  setQuickFillProgress(fromPercent, label);
+  const result = await Tesseract.recognize(source, options.lang || 'ara+eng', {
+    ...(options.psm ? {tessedit_pageseg_mode:String(options.psm)} : {}),
+    logger: message=>{
+      const status = message?.status || '';
+      const progress = Math.round((message?.progress || 0) * 100);
+      if(status.includes('recognizing')){
+        const next = fromPercent + ((toPercent - fromPercent) * (progress / 100));
+        setQuickFillProgress(next, `${label} ${progress}%`);
+      }
+    }
+  });
+  return result?.data?.text || '';
+}
+
+async function startQuickEmployeeFill(){
+  if(!quickEmployeeFillFile){
+    showToast('ارفق صورة البطاقة أولاً','error');
+    return;
+  }
+  const startBtn = document.getElementById('quickFillStartBtn');
+  startBtn.disabled = true;
+  document.getElementById('quickFillUploadPanel').style.display = 'none';
+  document.getElementById('quickFillAnalysisPanel').classList.add('show');
+  try{
+    setQuickFillProgress(8,'تحميل محرك قراءة البطاقة');
+    const Tesseract = await loadTesseractOcr();
+    const texts = [];
+    const parsedItems = [];
+    setQuickFillProgress(16,'بدء تحليل الصورة');
+    const fullText = await recognizeQuickFillTarget(Tesseract, quickEmployeeFillFile, 'قراءة البطاقة كاملة', 18, 58);
+    texts.push(fullText);
+    parsedItems.push(parseCivilIdCardText(fullText));
+
+    let parsed = mergeQuickFillParsedData(parsedItems);
+    if(quickFillNeedsExtraReading(parsed)){
+      const targets = await buildQuickFillExtraOcrTargets(quickEmployeeFillFile);
+      for(let i=0; i<targets.length; i++){
+        const start = 58 + (i * 8);
+        const targetText = await recognizeQuickFillTarget(Tesseract, targets[i].source, targets[i].label, start, start + 8, targets[i]);
+        texts.push(targetText);
+        const field = targets[i].field;
+        const parseOptions = field === 'name'
+          ? {only:'name', allowLooseArabicName:true}
+          : field === 'job'
+            ? {only:'job', skipName:true}
+            : {};
+        parsedItems.push(parseCivilIdCardText(targetText, parseOptions));
+        parsed = mergeQuickFillParsedData(parsedItems);
+        if(parsed.position && parsed.employer && isLikelyArabicPersonName(parsed.name,{minWords:3})) break;
+      }
+    }
+    setQuickFillProgress(94,'استخراج الحقول المطلوبة');
+    parsed = mergeQuickFillParsedData([parseCivilIdCardText(texts.join('\n'), {skipName:true}), ...parsedItems]);
+    console.info('HRMS quick fill OCR', {parsed, text:texts.join('\n---\n')});
+    fillEmployeeFormFromQuickData(parsed);
+    setQuickFillProgress(100,'تمت التعبئة');
+    setTimeout(()=>{
+      closeQuickEmployeeFillModal();
+      const count = Object.values(parsed).filter(Boolean).length;
+      showToast(count ? `تمت تعبئة ${count} حقول من البطاقة` : 'انتهى التحليل، لم يتم العثور على بيانات واضحة');
+    },450);
+  } catch(err){
+    console.error(err);
+    document.getElementById('quickFillUploadPanel').style.display = 'block';
+    document.getElementById('quickFillAnalysisPanel').classList.remove('show');
+    showToast('تعذر قراءة البطاقة. جرّب صورة أوضح أو أقرب','error');
+  } finally {
+    startBtn.disabled = false;
+  }
+}
+
 function saveEmployee(){
   const name = document.getElementById('empName').value.trim();
+  const civilId = document.getElementById('empCivilId').value.trim();
   const nat = document.getElementById('empNationality').value;
   const pos = document.getElementById('empPosition').value.trim();
   const emp = document.getElementById('empEmployer').value;
@@ -2890,12 +3755,12 @@ function saveEmployee(){
     if(editingEmpId){
       const idx = appData.employees.findIndex(e=>e.id===editingEmpId);
       if(idx>=0){
-        appData.employees[idx] = {...appData.employees[idx],name,nationality:nat,position:pos,employer:emp,employerId:employerRecord?.id || '',kwPhone,intlPhone,hours,schedType,segments:normalizedSegments};
+        appData.employees[idx] = {...appData.employees[idx],name,civilId,nationality:nat,position:pos,employer:emp,employerId:employerRecord?.id || '',kwPhone,intlPhone,hours,schedType,segments:normalizedSegments};
       }
       editingEmpId = null;
       showToast(`تم تعديل بيانات الموظف ${name} بنجاح`);
     } else {
-      const newEmp = {id:generateId(),name,nationality:nat,position:pos,employer:emp,employerId:employerRecord?.id || '',kwPhone,intlPhone,hours:parseInt(hours)||8,schedType,segments:[...normalizedSegments],documents:{},createdAt:new Date().toISOString()};
+      const newEmp = {id:generateId(),name,civilId,nationality:nat,position:pos,employer:emp,employerId:employerRecord?.id || '',kwPhone,intlPhone,hours:parseInt(hours)||8,schedType,segments:[...normalizedSegments],documents:{},createdAt:new Date().toISOString()};
       appData.employees.push(newEmp);
       showToast(`تم إدراج الموظف ${name} بنجاح ✓`);
     }
@@ -2910,6 +3775,7 @@ function saveEmployee(){
 function resetAddForm(){
   editingEmpId = null;
   document.getElementById('empName').value='';
+  document.getElementById('empCivilId').value='';
   document.getElementById('empNationality').value='';
   document.getElementById('empPosition').value='';
   document.getElementById('empEmployer').value='';
@@ -2958,6 +3824,7 @@ function openProfile(id){
         <div class="profile-meta">
           <span>${c.flag} ${c.name}</span>
           <span>🏢 ${emp.employer||'—'}</span>
+          ${emp.civilId?`<span>🪪 ${emp.civilId}</span>`:''}
           ${emp.kwPhone?`<span>📞 +965 ${emp.kwPhone}</span>`:''}
           <span>⏱ ${emp.hours||'—'} ساعة/يوم</span>
         </div>
@@ -2993,6 +3860,7 @@ function editEmployee(id){
   document.getElementById('topbarTitle').textContent = 'تعديل بيانات الموظف';
   setTimeout(()=>{
     document.getElementById('empName').value = emp.name||'';
+    document.getElementById('empCivilId').value = emp.civilId||'';
     document.getElementById('empNationality').value = emp.nationality||'';
     document.getElementById('empPosition').value = emp.position||'';
     document.getElementById('empEmployer').value = emp.employer||'';
@@ -3322,10 +4190,17 @@ function openScheduleDay(key, idx){
   document.getElementById('scheduleEmpty').style.display='none';
   document.getElementById('scheduleDayContent').style.display='block';
   scheduleState = JSON.parse(JSON.stringify(appData.schedules[key]||{zones:{surra:[],abulhasania:[],yarmouk:[]},approved:false,saved:false}));
+  scheduleState.zones = {
+    surra:scheduleState.zones?.surra || [],
+    abulhasania:scheduleState.zones?.abulhasania || [],
+    yarmouk:scheduleState.zones?.yarmouk || []
+  };
+  scheduleState.notes = normalizeScheduleNotes(scheduleState.notes || [], scheduleState);
   scheduleState.scheduleDate = scheduleState.scheduleDate || formatDateInput(scheduleDate);
   scheduleState.dayName = days[idx];
   renderScheduleBranchEmployerSelectors();
   renderScheduleZones();
+  renderScheduleNotes();
   renderStaffSidebar();
   updateScheduleButtons();
   scheduleModified = false;
@@ -3352,6 +4227,88 @@ function renderScheduleZones(){
       </div>`;
     }).join('') : '<div style="padding:12px;font-size:12px;color:#94a3b8;text-align:center">اسحب موظفاً هنا</div>';
   });
+}
+
+function renderScheduleNotes(){
+  const list = document.getElementById('scheduleNotesList');
+  if(!list) return;
+  scheduleState.notes = normalizeScheduleNotes(scheduleState.notes || [], scheduleState);
+  if(!scheduleState.notes.length){
+    list.innerHTML = '<div class="schedule-notes-empty">لا توجد ملاحظات لهذا الجدول</div>';
+    return;
+  }
+  list.innerHTML = scheduleState.notes.map((note,i)=>`
+    <div class="schedule-note-item">
+      <span class="schedule-note-color" style="background:${note.color}"></span>
+      <div class="schedule-note-body">
+        ${note.linkedToEmployee === false ? '' : `<div class="schedule-note-employee" style="color:${note.color}">${escapeHtml(note.empName)}</div>`}
+        <div class="schedule-note-text">${escapeHtml(note.text)}</div>
+      </div>
+      <button class="schedule-note-delete" onclick="removeScheduleNote(${i})">×</button>
+    </div>
+  `).join('');
+}
+
+function toggleScheduleNoteEmployeeLink(){
+  const checkbox = document.getElementById('scheduleNoteLinkEmp');
+  const select = document.getElementById('scheduleNoteEmp');
+  const enabled = checkbox?.checked !== false;
+  if(select){
+    select.disabled = !enabled;
+    select.style.display = enabled ? '' : 'none';
+  }
+}
+
+function openScheduleNoteModal(){
+  if(!selectedDay){
+    showToast('اختر اليوم أولاً','error');
+    return;
+  }
+  const select = document.getElementById('scheduleNoteEmp');
+  const checkbox = document.getElementById('scheduleNoteLinkEmp');
+  const employees = getScheduleEmployeesForNotes(scheduleState);
+  select.innerHTML = employees.length
+    ? employees.map(emp=>`<option value="${escapeHtml(emp.id)}">${escapeHtml(emp.name)}</option>`).join('')
+    : '<option value="">لا يوجد موظفون</option>';
+  if(checkbox) checkbox.checked = true;
+  toggleScheduleNoteEmployeeLink();
+  document.getElementById('scheduleNoteText').value = '';
+  openModal('scheduleNoteModal');
+}
+
+function saveScheduleNote(){
+  const select = document.getElementById('scheduleNoteEmp');
+  const linkEnabled = document.getElementById('scheduleNoteLinkEmp')?.checked !== false;
+  const text = document.getElementById('scheduleNoteText').value.trim();
+  if(!text){
+    showToast('اكتب الملاحظة أولاً','error');
+    return;
+  }
+  const employee = linkEnabled ? getScheduleEmployeesForNotes(scheduleState).find(emp=>emp.id === select.value) : null;
+  if(linkEnabled && !employee){
+    showToast('اختر الموظف المرتبط بالملاحظة','error');
+    return;
+  }
+  if(!Array.isArray(scheduleState.notes)) scheduleState.notes = [];
+  scheduleState.notes.push({
+    id:generateId(),
+    empId:linkEnabled ? employee.id : '',
+    empName:linkEnabled ? employee.name : '',
+    linkedToEmployee:linkEnabled,
+    text,
+    color:linkEnabled ? employee.color : '#64748b',
+    createdAt:new Date().toISOString()
+  });
+  markScheduleModified();
+  renderScheduleNotes();
+  closeModal('scheduleNoteModal');
+}
+
+function removeScheduleNote(index){
+  if(!Array.isArray(scheduleState.notes)) return;
+  scheduleState.notes.splice(index,1);
+  markScheduleModified();
+  renderScheduleNotes();
 }
 
 function renderStaffSidebar(){
@@ -3603,6 +4560,13 @@ async function chooseFolder(){
     saveData({sync:false,firebase:false});
     renderFolderSettings();
     const imported = await tryImportDataFromFolder({silent:false, overwrite:true});
+    if(imported.found && !imported.readable && canStartFreshInSelectedFolder()){
+      resetToFreshFolderDatabase(handle.name);
+      setFolderStatus('المجلد لا يحتوي على قاعدة بيانات قابلة للقراءة. تم بدء قاعدة جديدة من الصفر.', 'success');
+      showToast('تم بدء قاعدة جديدة لهذا المجلد');
+      await syncDataToFolder(false);
+      return;
+    }
     if(imported.imported || imported.found) return;
     resetToFreshFolderDatabase(handle.name);
     setFolderStatus('المجلد الجديد فارغ. تم بدء قاعدة بيانات جديدة من الصفر.', 'success');

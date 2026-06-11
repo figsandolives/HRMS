@@ -157,7 +157,10 @@
       <div class="page" id="page-addEmployee">
         <div style="max-width:800px">
           <div class="card">
-            <div class="section-title">المعلومات الأساسية</div>
+            <div class="section-header-actions">
+              <div class="section-title">المعلومات الأساسية</div>
+              <button class="btn btn-secondary btn-sm quick-fill-open-btn" onclick="openQuickEmployeeFillModal()">💳 إدخال سريع</button>
+            </div>
             <div class="form-row">
               <div class="form-group">
                 <label class="form-label">الاسم الكامل *</label>
@@ -172,10 +175,16 @@
             </div>
             <div class="form-row">
               <div class="form-group">
+                <label class="form-label">الرقم المدني</label>
+                <input class="form-control" id="empCivilId" placeholder="مثال: 298011804906" inputmode="numeric" maxlength="12" oninput="toEnglishDigits(this)">
+              </div>
+              <div class="form-group">
                 <label class="form-label">المسمى الوظيفي *</label>
                 <input class="form-control" id="empPosition" placeholder="مثال: محاسب، مدير مبيعات">
               </div>
-              <div class="form-group">
+            </div>
+            <div class="form-row">
+              <div class="form-group" style="grid-column:1/-1">
                 <label class="form-label">جهة العمل *</label>
                 <select class="form-control" id="empEmployer">
                   <option value="">اختر جهة العمل...</option>
@@ -284,6 +293,15 @@
                 <div class="schedule-branch branch-3">
                   <div class="branch-header">دوام فرع اليرموك</div>
                   <div class="schedule-drop-zone" id="zone-yarmouk" ondrop="dropToZone(event,'yarmouk')" ondragover="allowDrop(event)" ondragleave="leaveDrop(event)"></div>
+                </div>
+                <div class="schedule-notes-panel">
+                  <div class="schedule-notes-actions">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="openScheduleNoteModal()">
+                      <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                      <span>ملاحظات</span>
+                    </button>
+                  </div>
+                  <div id="scheduleNotesList" class="schedule-notes-list"></div>
                 </div>
                 <div style="margin-top:20px;display:flex;justify-content:space-between;align-items:center;padding-top:16px;border-top:1px solid #e2e8f0">
                   <button id="saveDayBtn" class="btn btn-secondary btn-sm" onclick="saveScheduleDay()">
@@ -595,6 +613,41 @@
   </div>
 </div>
 
+<!-- Quick Employee Fill Modal -->
+<div class="modal-overlay" id="quickFillModal">
+  <div class="modal quick-fill-modal">
+    <div class="modal-header">
+      <div class="modal-title">إدخال سريع من البطاقة المدنية</div>
+      <button class="modal-close" onclick="closeQuickEmployeeFillModal()">✕</button>
+    </div>
+    <div class="quick-fill-body">
+      <div class="quick-fill-upload" id="quickFillUploadPanel">
+        <label class="quick-fill-drop">
+          <input type="file" id="quickFillImage" accept="image/*" onchange="handleQuickFillImageChange(this)">
+          <span class="quick-fill-card-icon">💳</span>
+          <strong>ارفق صورة البطاقة المدنية</strong>
+          <small>يفضل أن تكون الصورة واضحة وتظهر الجهة الأمامية والخلفية</small>
+        </label>
+        <div class="quick-fill-preview" id="quickFillPreview"></div>
+        <div class="quick-fill-note">سيتم تحليل الصورة داخل المتصفح ومحاولة تعبئة الاسم، الرقم المدني، الجنسية، المسمى، وجهة العمل.</div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px">
+          <button class="btn btn-secondary" onclick="closeQuickEmployeeFillModal()">إلغاء</button>
+          <button class="btn btn-primary" id="quickFillStartBtn" onclick="startQuickEmployeeFill()">بدء التعبئة</button>
+        </div>
+      </div>
+      <div class="quick-fill-analysis" id="quickFillAnalysisPanel">
+        <div class="quick-fill-orbit">
+          <span></span><span></span><span></span>
+          <div class="quick-fill-card-scan">ID</div>
+        </div>
+        <div class="quick-fill-analysis-title">تحليل بيانات البطاقة...</div>
+        <div class="quick-fill-analysis-sub" id="quickFillAnalysisText">جاري تجهيز محرك القراءة</div>
+        <div class="quick-fill-progress"><span id="quickFillProgressBar"></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Schedule Segment Modal -->
 <div class="modal-overlay" id="scheduleSegModal">
   <div class="modal" style="max-width:480px">
@@ -635,6 +688,31 @@
     <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px">
       <button class="btn btn-secondary" onclick="closeModal('scheduleSegModal')">إلغاء</button>
       <button class="btn btn-primary" onclick="saveScheduleSegment()">إضافة للجدول</button>
+    </div>
+  </div>
+</div>
+
+<!-- Schedule Note Modal -->
+<div class="modal-overlay" id="scheduleNoteModal">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header">
+      <div class="modal-title">إضافة ملاحظة للجدول</div>
+      <button class="modal-close" onclick="closeModal('scheduleNoteModal')">✕</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label" style="display:flex;align-items:center;gap:8px;justify-content:flex-end">
+        <input type="checkbox" id="scheduleNoteLinkEmp" checked onchange="toggleScheduleNoteEmployeeLink()">
+        <span>ربط الملاحظة بالموظف</span>
+      </label>
+      <select class="form-control" id="scheduleNoteEmp"></select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">الملاحظة</label>
+      <textarea class="form-control" id="scheduleNoteText" rows="4" placeholder="اكتب الملاحظة هنا"></textarea>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px">
+      <button class="btn btn-secondary" onclick="closeModal('scheduleNoteModal')">إلغاء</button>
+      <button class="btn btn-primary" onclick="saveScheduleNote()">حفظ الملاحظة</button>
     </div>
   </div>
 </div>

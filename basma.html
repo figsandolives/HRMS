@@ -48,6 +48,11 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--text);min
 .fingerprint-hit{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:48px;min-height:34px;padding:5px 9px;border-radius:12px;color:#fff;font-size:11px;font-weight:800;line-height:1.25;background:var(--hit-color)}
 .fingerprint-hit.issue{background:var(--red);min-width:150px}
 .fingerprint-hit-branch{font-size:10px;font-weight:700;opacity:.9}
+.fingerprint-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}
+.summary-card{background:var(--panel3);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+.summary-label{font-size:13px;color:var(--text2);font-weight:900}
+.summary-value{font-size:24px;color:var(--heading);font-weight:900;margin-top:5px}
+.summary-value.alert{color:var(--red)}
 .empty{padding:44px 16px;text-align:center;color:var(--text3);background:var(--panel3);border:1px solid var(--border);border-radius:var(--radius);font-weight:800}
 @media (max-width:760px){
   .topbar{height:auto;align-items:flex-start;gap:14px;padding:16px;flex-direction:column}
@@ -56,6 +61,7 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--text);min
   .controls{justify-content:stretch;width:100%}
   .control,.btn{width:100%}
   .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .fingerprint-summary{grid-template-columns:1fr}
 }
 </style>
 </head>
@@ -333,6 +339,48 @@ function getPunchBranchName(punch, row, sortedPunches){
   return items[Math.min(index,items.length - 1)]?.branchName || '';
 }
 
+function getRowAttendanceTotals(row){
+  const sortedPunches = [...(row.punches || [])].sort((a,b)=>punchTimeToMinutes(a)-punchTimeToMinutes(b));
+  if(!row.empId || !row.dateValue || !sortedPunches.length) return {late:0, early:0, total:0};
+  const scheduleWindow = getScheduledWindow(row.empId,row.dateValue);
+  if(!scheduleWindow) return {late:0, early:0, total:0};
+  const firstPunch = sortedPunches[0];
+  const lastPunch = sortedPunches[sortedPunches.length - 1];
+  const firstMinutes = punchTimeToMinutes(firstPunch);
+  const lastMinutes = punchTimeToMinutes(lastPunch);
+  const late = firstMinutes > scheduleWindow.start ? firstMinutes - scheduleWindow.start : 0;
+  const hasExitPunch = sortedPunches.length > 1 && (lastPunch.type === 'out' || !lastPunch.type);
+  const early = hasExitPunch && lastMinutes < scheduleWindow.end ? scheduleWindow.end - lastMinutes : 0;
+  return {late, early, total:late + early};
+}
+
+function sumAttendanceTotals(rows){
+  return rows.reduce((acc,row)=>{
+    const totals = getRowAttendanceTotals(row);
+    acc.late += totals.late;
+    acc.early += totals.early;
+    acc.total += totals.total;
+    return acc;
+  },{late:0, early:0, total:0});
+}
+
+function formatMinutesDuration(minutes){
+  const value = Math.max(0, Math.round(Number(minutes) || 0));
+  const hours = Math.floor(value / 60);
+  const mins = value % 60;
+  if(hours && mins) return `${hours} ساعة و ${mins} دقيقة`;
+  if(hours) return `${hours} ساعة`;
+  return `${mins} دقيقة`;
+}
+
+function buildFingerprintSummary(totals){
+  return `<div class="fingerprint-summary">
+    <div class="summary-card"><div class="summary-label">ساعات التأخير</div><div class="summary-value alert">${formatMinutesDuration(totals.late)}</div></div>
+    <div class="summary-card"><div class="summary-label">ساعات الخروج المبكر</div><div class="summary-value alert">${formatMinutesDuration(totals.early)}</div></div>
+    <div class="summary-card"><div class="summary-label">الإجمالي</div><div class="summary-value">${formatMinutesDuration(totals.total)}</div></div>
+  </div>`;
+}
+
 function buildFingerprintTable(rows, columns, firstHeader='اسم الموظف'){
   if(!columns.length) return '<div class="empty">لا توجد بصمات في الفترة المحددة</div>';
   const head = columns.map(time=>`<th>${formatTimeValue(time)}</th>`).join('');
@@ -444,7 +492,7 @@ function renderReport(){
       };
     });
     subtitle.textContent = emp ? `${emp.name} من ${parseDateInput(fromValue).toLocaleDateString('ar-KW')} إلى ${parseDateInput(toValue).toLocaleDateString('ar-KW')}` : '';
-    view.innerHTML = buildFingerprintTable(rows,columns,'اليوم');
+    view.innerHTML = buildFingerprintTable(rows,columns,'اليوم') + buildFingerprintSummary(sumAttendanceTotals(rows));
     return;
   }
 
