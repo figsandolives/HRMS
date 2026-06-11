@@ -69,6 +69,21 @@
     return publishedAt;
   }
 
+  async function publishHrmsData(payload){
+    const db = await getDatabase();
+    const publishedAt = new Date().toISOString();
+    const updatePayload = {
+      updatedAt:publishedAt,
+      corePublishedAt:publishedAt
+    };
+    if(payload?.employees) updatePayload.employees = payload.employees;
+    if(payload?.employers) updatePayload.employers = payload.employers;
+    if(payload?.fingerprintCodes) updatePayload.fingerprintCodes = payload.fingerprintCodes;
+    if(payload?.fingerprintPlaces) updatePayload.fingerprintPlaces = payload.fingerprintPlaces;
+    await db.ref('hrData').update(updatePayload);
+    return publishedAt;
+  }
+
   async function publishFingerprintPlaceSession(sessionId, payload){
     if(!sessionId) throw new Error('sessionId is required');
     const db = await getDatabase();
@@ -127,6 +142,7 @@
   window.hrmsFirebase = {
     getDatabase,
     publishApprovedSchedule,
+    publishHrmsData,
     publishFingerprintPlaceSession,
     watchFingerprintPlaceSession,
     watchFingerprintPlaceSessions,
@@ -135,4 +151,5 @@
     deleteFingerprintPlace
   };
   window.publishHrmsApprovedSchedule = publishApprovedSchedule;
+  window.publishHrmsData = publishHrmsData;
 })();

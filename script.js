@@ -253,6 +253,19 @@ function getFirebaseEmployersPayload(){
   return payload;
 }
 
+function getFirebaseFingerprintPlacesPayload(){
+  const source = fingerprintPlacesCache && Object.keys(fingerprintPlacesCache).length
+    ? fingerprintPlacesCache
+    : (appData.fingerprintPlaces || {});
+  if(Array.isArray(source)){
+    return source.reduce((payload, place)=>{
+      if(place?.id) payload[place.id] = cloneForFirebase(place);
+      return payload;
+    },{});
+  }
+  return cloneForFirebase(source || {});
+}
+
 function loadExternalScript(src){
   return new Promise((resolve,reject)=>{
     const existing = document.querySelector(`script[src="${src}"]`);
@@ -277,10 +290,15 @@ function loadExternalScript(src){
 async function loadFirebasePublisher(options={}){
   const needsSessionWatcher = options.requireSessionWatcher === true;
   const needsFresh = options.fresh === true;
-  const hasRequiredApi = !needsFresh && window.publishHrmsApprovedSchedule && window.hrmsFirebase && (!needsSessionWatcher || typeof window.hrmsFirebase.watchFingerprintPlaceSessions === 'function');
+  const needsDataPublisher = options.requireDataPublisher === true;
+  const hasRequiredApi = !needsFresh
+    && window.publishHrmsApprovedSchedule
+    && window.hrmsFirebase
+    && (!needsSessionWatcher || typeof window.hrmsFirebase.watchFingerprintPlaceSessions === 'function')
+    && (!needsDataPublisher || typeof window.hrmsFirebase.publishHrmsData === 'function');
   if(hasRequiredApi) return;
-  if(!firebasePublisherScriptPromise || needsSessionWatcher || needsFresh){
-    const cacheKey = (needsSessionWatcher || needsFresh) ? `?v=${Date.now()}` : '';
+  if(!firebasePublisherScriptPromise || needsSessionWatcher || needsFresh || needsDataPublisher){
+    const cacheKey = (needsSessionWatcher || needsFresh || needsDataPublisher) ? `?v=${Date.now()}` : '';
     firebasePublisherScriptPromise = loadExternalScript(`firebase-publisher.js${cacheKey}`);
   }
   await firebasePublisherScriptPromise;
@@ -288,6 +306,18 @@ async function loadFirebasePublisher(options={}){
 
 function cloneForFirebase(data){
   return JSON.parse(JSON.stringify(data ?? null));
+}
+
+async function publishHrmsCoreDataToFirebase(){
+  await loadFirebasePublisher({requireDataPublisher:true});
+  const publisher = window.hrmsFirebase?.publishHrmsData || window.publishHrmsData;
+  if(typeof publisher !== 'function') throw new Error('ناشر بيانات Firebase غير جاهز');
+  return publisher({
+    employees:getFirebaseEmployeesPayload(),
+    employers:getFirebaseEmployersPayload(),
+    fingerprintCodes:cloneForFirebase(appData.fingerprintCodes || {}),
+    fingerprintPlaces:getFirebaseFingerprintPlacesPayload()
+  });
 }
 
 async function publishApprovedScheduleToFirebase(dayKey, schedule){
@@ -2797,8 +2827,20 @@ async function syncDataToFolder(userTriggered=false){
     const result = await writeHrmsFilesToDirectory(selectedSaveDirectoryHandle,syncedAt);
     localStorage.setItem('hrmsData',JSON.stringify(appData));
     renderFolderSettings();
-    setFolderStatus(`تمت المزامنة: ${result.employees} موظف، ${result.documents} مستند، ${result.schedules} جدول، ${result.pdfs || 0} PDF.`, 'success');
-    if(userTriggered) showToast('تم حفظ الملفات داخل المجلد');
+    const localSyncMessage = `تمت المزامنة: ${result.employees} موظف، ${result.documents} مستند، ${result.schedules} جدول، ${result.pdfs || 0} PDF.`;
+    if(userTriggered){
+      try{
+        await publishHrmsCoreDataToFirebase();
+        setFolderStatus(`${localSyncMessage} وتم نشر رموز تطبيق البصمة.`, 'success');
+        showToast('تم حفظ الملفات ونشر رموز البصمة');
+      } catch(firebaseErr){
+        console.error(firebaseErr);
+        setFolderStatus(`${localSyncMessage} لكن تعذر نشر رموز تطبيق البصمة.`, 'warn');
+        showToast('تم حفظ الملفات، لكن تعذر نشر رموز البصمة','error');
+      }
+    } else {
+      setFolderStatus(localSyncMessage, 'success');
+    }
   } catch(err){
     console.error(err);
     setFolderStatus('حدث خطأ أثناء حفظ الملفات داخل المجلد.', 'error');
@@ -4119,7 +4161,7 @@ function renderFingerprintCodes(){
   `).join('');
 }
 
-function saveFingerprintCodes(){
+async function saveFingerprintCodes(){
   const inputs = [...document.querySelectorAll('.fingerprint-code-input')];
   const nextCodes = {};
   const used = new Map();
@@ -4137,7 +4179,13 @@ function saveFingerprintCodes(){
   }
   appData.fingerprintCodes = nextCodes;
   saveData();
-  showToast('تم حفظ رموز دخول البصمة');
+  try{
+    await publishHrmsCoreDataToFirebase();
+    showToast('تم حفظ رموز دخول البصمة ونشرها للتطبيق');
+  } catch(err){
+    console.error(err);
+    showToast('تم حفظ الرموز محلياً، لكن تعذر نشرها للتطبيق','error');
+  }
 }
 
 // ===== SCHEDULE =====
