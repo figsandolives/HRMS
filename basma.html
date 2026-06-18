@@ -326,6 +326,8 @@ function getPunchTypeLabel(punch, sortedPunches){
 }
 
 function getPunchBranchName(punch, row, sortedPunches){
+  const punchBranch = normalizeBranchName(punch?.location?.branchName || punch?.branchName || punch?.location?.branchKey || punch?.branchKey);
+  if(punchBranch) return punchBranch;
   if(!row.empId || !row.dateValue) return '';
   const items = getScheduleItemsForEmployee(row.empId,row.dateValue);
   if(!items.length) return '';
