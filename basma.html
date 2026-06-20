@@ -30,6 +30,9 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--text);min
 .controls{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
 .control{height:42px;border:1px solid var(--border);background:var(--panel2);border-radius:10px;padding:0 12px;font-family:'Tajawal',sans-serif;font-weight:800;color:var(--heading);min-width:150px;outline:none}
 .control:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.14)}
+.report-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin:0 0 16px}
+.btn-danger{background:#fee2e2;border-color:#fecaca;color:#b91c1c}
+.btn-muted{background:var(--panel3);color:var(--text)}
 .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
 .stat{background:var(--panel3);border:1px solid var(--border);border-radius:12px;padding:14px}
 .stat-label{font-size:12px;color:var(--text2);font-weight:700}
@@ -45,7 +48,7 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--text);min
 .fingerprint-table th:first-child{background:var(--panel2);z-index:4}
 .fingerprint-cell{position:relative;color:var(--text2)}
 .fingerprint-cell.bridge{box-shadow:inset 0 0 0 9999px var(--bridge-color)}
-.fingerprint-hit{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:48px;min-height:34px;padding:5px 9px;border-radius:12px;color:#fff;font-size:11px;font-weight:800;line-height:1.25;background:var(--hit-color)}
+.fingerprint-hit{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:48px;min-height:34px;padding:5px 9px;border-radius:12px;color:#fff;font-size:11px;font-weight:800;line-height:1.25;background:var(--hit-color);border:0;cursor:pointer;font-family:'Cairo',sans-serif}
 .fingerprint-hit.issue{background:var(--red);min-width:150px}
 .fingerprint-hit-branch{font-size:10px;font-weight:700;opacity:.9}
 .fingerprint-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}
@@ -54,14 +57,40 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--text);min
 .summary-value{font-size:24px;color:var(--heading);font-weight:900;margin-top:5px}
 .summary-value.alert{color:var(--red)}
 .empty{padding:44px 16px;text-align:center;color:var(--text3);background:var(--panel3);border:1px solid var(--border);border-radius:var(--radius);font-weight:800}
+.hidden{display:none!important}
+.modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.52);display:flex;align-items:center;justify-content:center;padding:18px;z-index:50}
+.modal-card{width:min(760px,100%);max-height:92vh;overflow:auto;background:var(--panel);border:1px solid var(--border);border-radius:18px;box-shadow:0 30px 80px rgba(15,23,42,.25);padding:22px}
+.modal-head{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--border)}
+.modal-title{font-size:22px;font-weight:900;color:var(--heading)}
+.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:16px}
+.form-field{display:flex;flex-direction:column;gap:7px}
+.form-field label{font-size:13px;font-weight:900;color:var(--text2)}
+.employee-picker{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;margin:12px 0 16px}
+.employee-option{border:1px solid var(--border);background:var(--panel3);border-radius:12px;padding:10px;display:flex;align-items:center;gap:10px;cursor:pointer;text-align:right}
+.employee-option.selected{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.13);background:#eff6ff}
+.employee-avatar{width:42px;height:42px;border-radius:12px;overflow:hidden;display:flex;align-items:center;justify-content:center;font-weight:900;flex:0 0 auto}
+.employee-avatar img{width:100%;height:100%;object-fit:cover}
+.employee-option-name{font-weight:900;color:var(--heading);font-size:13px;line-height:1.35}
+.modal-actions{display:flex;gap:10px;justify-content:flex-start;margin-top:12px}
+.edit-popover{position:fixed;z-index:60;background:var(--panel);border:1px solid var(--border);border-radius:12px;box-shadow:0 18px 45px rgba(15,23,42,.2);padding:10px;display:flex;gap:8px;align-items:center}
+.edit-popover .btn{height:34px;padding:0 12px;font-size:12px}
+.export-sheet{direction:rtl;font-family:'Tajawal','Cairo',Arial,sans-serif;color:#111827;padding:18px}
+.export-sheet h1{font-size:24px;margin:0 0 6px}
+.export-sheet .export-subtitle{color:#64748b;margin-bottom:18px;font-weight:700}
+.export-sheet table{width:100%;border-collapse:collapse}
+.export-sheet th,.export-sheet td{border:1px solid #dbe3ef;padding:8px;text-align:center;font-size:12px}
+.export-sheet th{background:#eef2f7;font-weight:900}
 @media (max-width:760px){
   .topbar{height:auto;align-items:flex-start;gap:14px;padding:16px;flex-direction:column}
   .layout{padding:16px}
   .toolbar{flex-direction:column}
   .controls{justify-content:stretch;width:100%}
   .control,.btn{width:100%}
+  .report-actions{justify-content:stretch}
   .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
   .fingerprint-summary{grid-template-columns:1fr}
+  .form-grid{grid-template-columns:1fr}
+  .modal-actions{flex-direction:column}
 }
 </style>
 </head>
@@ -75,7 +104,7 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--text);min
   </div>
   <div class="top-actions">
     <span class="status" id="connectionStatus">جاري الاتصال</span>
-    <a class="btn" href="index.html">الرجوع للنظام</a>
+    <button class="btn" type="button" onclick="returnToSystem()">الرجوع للنظام</button>
   </div>
 </header>
 
@@ -98,9 +127,55 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--text);min
       </div>
     </div>
 
+    <div class="report-actions">
+      <button class="btn btn-primary" type="button" onclick="openAddPunchModal()">إضافة بصمة جديدة</button>
+      <button class="btn" type="button" onclick="downloadReportExcel()">تحميل Excel</button>
+      <button class="btn" type="button" onclick="downloadReportPdf()">تحميل PDF</button>
+    </div>
+
     <div id="reportView" class="empty">جاري تحميل بيانات البصمة...</div>
   </section>
 </main>
+
+<div class="modal-backdrop hidden" id="addPunchModal" onclick="closeAddPunchModal(event)">
+  <div class="modal-card" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <div class="modal-title">إضافة بصمة جديدة</div>
+      <button class="btn btn-muted" type="button" onclick="closeAddPunchModal()">إغلاق</button>
+    </div>
+    <div class="form-grid">
+      <div class="form-field">
+        <label for="manualPunchDate">التاريخ</label>
+        <input class="control" type="date" id="manualPunchDate">
+      </div>
+      <div class="form-field">
+        <label for="manualPunchTime">الوقت</label>
+        <input class="control" type="time" id="manualPunchTime">
+      </div>
+      <div class="form-field">
+        <label for="manualPunchType">نوع البصمة</label>
+        <select class="control" id="manualPunchType">
+          <option value="in">دخول</option>
+          <option value="out">خروج</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-field">
+      <label>اختر الموظف</label>
+      <div class="employee-picker" id="manualEmployeePicker"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" type="button" onclick="addManualPunch()">إضافة</button>
+      <button class="btn" type="button" onclick="closeAddPunchModal()">إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<div class="edit-popover hidden" id="punchEditMenu">
+  <button class="btn btn-primary" type="button" id="punchEditButton" onclick="showPunchDeleteChoices()">تعديل</button>
+  <button class="btn btn-danger hidden" type="button" id="punchDeleteButton" onclick="deleteSelectedPunch()">حذف</button>
+  <button class="btn hidden" type="button" id="punchCancelButton" onclick="closePunchEditMenu()">إلغاء</button>
+</div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
@@ -119,7 +194,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 const colors = ['#2563eb','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#14b8a6','#f97316'];
-const state = {employees:[], schedules:{}, punches:[], hrLoaded:false, punchesLoaded:false};
+const state = {employees:[], schedules:{}, punches:[], hrLoaded:false, punchesLoaded:false, selectedManualEmpId:'', selectedPunchId:''};
 const dateDayKeys = ['sun','mon','tue','wed','thu','fri','sat'];
 const branchNames = {
   surra:'حولي',
@@ -131,6 +206,14 @@ function setConnectionStatus(text,type=''){
   const el = document.getElementById('connectionStatus');
   el.textContent = text;
   el.className = `status ${type}`.trim();
+}
+
+function returnToSystem(){
+  if(window.history.length > 1){
+    window.history.back();
+    return;
+  }
+  window.location.href = 'index.html';
 }
 
 function escapeHtml(value){
@@ -185,6 +268,25 @@ function colorForKey(key){
   return colors[Math.abs(hash) % colors.length];
 }
 
+function getInitials(name){
+  return String(name || 'موظف').trim().split(/\s+/).slice(0,2).map(part=>part[0] || '').join('');
+}
+
+function getEmployeePhoto(emp){
+  const value = String(emp?.photoData || '').trim();
+  return /^data:image\//.test(value) || /^https?:\/\//.test(value) ? value : '';
+}
+
+function getEmployeeName(empId){
+  return getEmployeesForReport().find(emp=>emp.id === empId)?.name || empId || 'موظف';
+}
+
+function buildLocalIso(dateValue, timeValue){
+  const [year,month,day] = String(dateValue).split('-').map(Number);
+  const [hour,minute] = String(timeValue || '00:00').split(':').map(Number);
+  return new Date(year, (month || 1) - 1, day || 1, hour || 0, minute || 0, 0, 0).toISOString();
+}
+
 function normalizeEmployees(value){
   const list = Array.isArray(value) ? value : Object.values(value || {});
   return list
@@ -194,6 +296,7 @@ function normalizeEmployees(value){
       name:emp.name || emp.empName || 'موظف',
       position:emp.position || '',
       employer:emp.employer || '',
+      photoData:emp.photoData || emp.photo || emp.profilePhoto || emp.avatar || emp.documents?.photo?.fileData || '',
       schedType:emp.schedType || '',
       segments:Array.isArray(emp.segments) ? emp.segments : []
     }))
@@ -412,7 +515,8 @@ function buildFingerprintTable(rows, columns, firstHeader='اسم الموظف')
         const typeLabel = getPunchTypeLabel(punch,sortedPunches);
         const branchName = getPunchBranchName(punch,row,sortedPunches);
         const label = issueLabel ? `${typeLabel} ${punchTime} - ${issueLabel}` : `${typeLabel} ${punchTime}`;
-        return `<span class="fingerprint-hit ${issueLabel?'issue':''}" style="${style}"><span>${label}</span>${branchName?`<span class="fingerprint-hit-branch">${escapeHtml(branchName)}</span>`:''}</span>`;
+        const encodedId = encodeURIComponent(punch.id || '');
+        return `<span class="fingerprint-hit ${issueLabel?'issue':''}" style="${style}" role="button" tabindex="0" onclick="showPunchEditMenu(event,'${encodedId}')"><span>${label}</span>${branchName?`<span class="fingerprint-hit-branch">${escapeHtml(branchName)}</span>`:''}</span>`;
       }).join(' ');
       return `<td class="fingerprint-cell ${isBridge?'bridge':''}" style="${style}">${content}</td>`;
     }).join('');
@@ -514,6 +618,195 @@ function renderReport(){
   view.innerHTML = buildFingerprintTable(rows,columns,'اسم الموظف');
 }
 
+function openAddPunchModal(){
+  ensureControls();
+  const employees = getEmployeesForReport();
+  if(!employees.length){
+    alert('لا توجد بيانات موظفين لإضافة بصمة.');
+    return;
+  }
+  const mode = document.getElementById('reportMode').value;
+  const selectedFromReport = mode === 'employee' ? document.getElementById('employeeSelect').value : '';
+  state.selectedManualEmpId = selectedFromReport || employees[0].id;
+  const dateValue = mode === 'day'
+    ? document.getElementById('dayDate').value
+    : (document.getElementById('fromDate').value || formatDateInput(new Date()));
+  const now = new Date();
+  document.getElementById('manualPunchDate').value = dateValue || formatDateInput(now);
+  document.getElementById('manualPunchTime').value = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  document.getElementById('manualPunchType').value = 'in';
+  renderManualEmployeePicker();
+  document.getElementById('addPunchModal').classList.remove('hidden');
+}
+
+function closeAddPunchModal(event){
+  if(event && event.target?.id !== 'addPunchModal') return;
+  document.getElementById('addPunchModal').classList.add('hidden');
+}
+
+function renderManualEmployeePicker(){
+  const picker = document.getElementById('manualEmployeePicker');
+  const employees = getEmployeesForReport();
+  picker.innerHTML = employees.map(emp=>{
+    const selected = emp.id === state.selectedManualEmpId;
+    const color = colorForKey(emp.id);
+    const photo = getEmployeePhoto(emp);
+    const avatar = photo
+      ? `<span class="employee-avatar"><img src="${escapeHtml(photo)}" alt=""></span>`
+      : `<span class="employee-avatar" style="background:${hexToRgba(color,.16)};color:${color}">${escapeHtml(getInitials(emp.name))}</span>`;
+    return `<button class="employee-option ${selected?'selected':''}" type="button" onclick="selectManualEmployee('${encodeURIComponent(emp.id)}')">
+      ${avatar}
+      <span class="employee-option-name">${escapeHtml(emp.name)}</span>
+    </button>`;
+  }).join('');
+}
+
+function selectManualEmployee(encodedEmpId){
+  state.selectedManualEmpId = decodeURIComponent(encodedEmpId || '');
+  renderManualEmployeePicker();
+}
+
+async function addManualPunch(){
+  const emp = getEmployeesForReport().find(item=>item.id === state.selectedManualEmpId);
+  const dateValue = document.getElementById('manualPunchDate').value;
+  const timeValue = document.getElementById('manualPunchTime').value;
+  const typeValue = document.getElementById('manualPunchType').value;
+  if(!emp || !dateValue || !timeValue){
+    alert('اختر الموظف والتاريخ والوقت أولاً.');
+    return;
+  }
+  const payload = {
+    empId:emp.id,
+    empName:emp.name,
+    type:typeValue,
+    date:dateValue,
+    time:timeValue,
+    iso:buildLocalIso(dateValue,timeValue),
+    manual:true,
+    source:'manual-report',
+    createdAt:new Date().toISOString()
+  };
+  try{
+    await db.ref('fingerprintPunches').push(payload);
+    closeAddPunchModal();
+  } catch(err){
+    console.error(err);
+    alert('تعذر إضافة البصمة. تأكد من الاتصال وصلاحيات Firebase.');
+  }
+}
+
+function showPunchEditMenu(event, encodedPunchId){
+  event.stopPropagation();
+  const id = decodeURIComponent(encodedPunchId || '');
+  if(!id) return;
+  state.selectedPunchId = id;
+  const menu = document.getElementById('punchEditMenu');
+  document.getElementById('punchEditButton').classList.remove('hidden');
+  document.getElementById('punchDeleteButton').classList.add('hidden');
+  document.getElementById('punchCancelButton').classList.add('hidden');
+  menu.classList.remove('hidden');
+  const rect = event.currentTarget.getBoundingClientRect();
+  const top = Math.max(8, rect.top - menu.offsetHeight - 8);
+  const left = Math.min(Math.max(8, rect.left + rect.width / 2 - menu.offsetWidth / 2), window.innerWidth - menu.offsetWidth - 8);
+  menu.style.top = `${top}px`;
+  menu.style.left = `${left}px`;
+}
+
+function showPunchDeleteChoices(){
+  document.getElementById('punchEditButton').classList.add('hidden');
+  document.getElementById('punchDeleteButton').classList.remove('hidden');
+  document.getElementById('punchCancelButton').classList.remove('hidden');
+}
+
+function closePunchEditMenu(){
+  document.getElementById('punchEditMenu').classList.add('hidden');
+  state.selectedPunchId = '';
+}
+
+async function deleteSelectedPunch(){
+  if(!state.selectedPunchId) return;
+  try{
+    await db.ref(`fingerprintPunches/${state.selectedPunchId}`).remove();
+    closePunchEditMenu();
+  } catch(err){
+    console.error(err);
+    alert('تعذر حذف البصمة. تأكد من الاتصال وصلاحيات Firebase.');
+  }
+}
+
+function getReportFileBaseName(){
+  const mode = document.getElementById('reportMode').value;
+  if(mode === 'employee'){
+    const empName = getEmployeeName(document.getElementById('employeeSelect').value);
+    return `تقرير البصمة - ${empName} - ${document.getElementById('fromDate').value || ''} إلى ${document.getElementById('toDate').value || ''}`.trim();
+  }
+  return `تقرير البصمة - ${document.getElementById('dayDate').value || formatDateInput(new Date())}`;
+}
+
+function cloneReportWithInlineStyles(){
+  const source = document.getElementById('reportView');
+  const clone = source.cloneNode(true);
+  const sourceNodes = [source, ...source.querySelectorAll('*')];
+  const cloneNodes = [clone, ...clone.querySelectorAll('*')];
+  const props = ['display','flex-direction','align-items','justify-content','gap','background-color','color','font-family','font-size','font-weight','line-height','border','border-left','border-bottom','border-radius','box-shadow','padding','margin','width','min-width','height','min-height','text-align','white-space','position','right','top','z-index'];
+  sourceNodes.forEach((node,index)=>{
+    const target = cloneNodes[index];
+    if(!target || !(node instanceof HTMLElement) || !(target instanceof HTMLElement)) return;
+    const styles = window.getComputedStyle(node);
+    target.style.cssText += props.map(prop=>`${prop}:${styles.getPropertyValue(prop)}`).join(';');
+  });
+  return clone.outerHTML;
+}
+
+function buildExportHtml(){
+  const title = 'تقرير البصمة';
+  const subtitle = document.getElementById('reportSubtitle').textContent || '';
+  return `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><title>${escapeHtml(getReportFileBaseName())}</title>
+    <style>
+      @page{size:A4 landscape;margin:12mm}
+      body{font-family:'Tajawal','Cairo',Arial,sans-serif;background:#f4f7fb;color:#111827;margin:0;padding:18px;direction:rtl}
+      .export-sheet{background:#fff;border:1px solid #dbe3ef;border-radius:14px;padding:18px}
+      h1{font-size:24px;margin:0 0 6px;color:#0f172a}
+      .export-subtitle{color:#64748b;margin-bottom:16px;font-weight:800}
+      table{width:100%;border-collapse:separate;border-spacing:0}
+      th,td{border:1px solid #dbe3ef;padding:8px;text-align:center}
+    </style></head><body><section class="export-sheet"><h1>${title}</h1><div class="export-subtitle">${escapeHtml(subtitle)}</div>${cloneReportWithInlineStyles()}</section></body></html>`;
+}
+
+function downloadReportExcel(){
+  if(!document.querySelector('#reportView table')){
+    alert('لا يوجد جدول جاهز للتحميل.');
+    return;
+  }
+  const html = `\ufeff${buildExportHtml()}`;
+  const blob = new Blob([html], {type:'application/vnd.ms-excel;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${getReportFileBaseName()}.xls`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function downloadReportPdf(){
+  if(!document.querySelector('#reportView table')){
+    alert('لا يوجد جدول جاهز للتحميل.');
+    return;
+  }
+  const win = window.open('', '_blank');
+  if(!win){
+    alert('المتصفح منع فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة ثم حاول مرة أخرى.');
+    return;
+  }
+  win.document.open();
+  win.document.write(buildExportHtml());
+  win.document.close();
+  win.focus();
+  setTimeout(()=>win.print(), 350);
+}
+
 function startFirebaseListeners(){
   db.ref('.info/connected').on('value', snap=>{
     setConnectionStatus(snap.val() ? 'متصل' : 'غير متصل', snap.val() ? 'connected' : 'error');
@@ -541,6 +834,12 @@ function startFirebaseListeners(){
 document.addEventListener('DOMContentLoaded', ()=>{
   ensureControls();
   startFirebaseListeners();
+  document.addEventListener('click', event=>{
+    const menu = document.getElementById('punchEditMenu');
+    if(menu && !menu.classList.contains('hidden') && !menu.contains(event.target)){
+      closePunchEditMenu();
+    }
+  });
 });
 </script>
 </body>

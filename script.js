@@ -43,7 +43,60 @@ const countries = [
 ];
 
 // App State
-let appData = JSON.parse(localStorage.getItem('hrmsData') || '{}');
+const HRMS_LEGACY_STORAGE_KEY = 'hrmsData';
+const HRMS_SETTINGS_STORAGE_KEY = 'hrmsSettings';
+
+function parseStoredJson(key, fallback={}){
+  try{
+    const raw = localStorage.getItem(key);
+    if(!raw) return fallback;
+    return JSON.parse(raw);
+  } catch(err){
+    console.warn(`تعذر قراءة ${key} من تخزين المتصفح`, err);
+    return fallback;
+  }
+}
+
+function getPersistableSettings(settings={}){
+  const keys = [
+    'theme',
+    'saveFolderName',
+    'folderSelectedAt',
+    'freshFolderStartedAt',
+    'lastFileSyncAt',
+    'importedAt',
+    'firebaseLoadedAt'
+  ];
+  return keys.reduce((acc,key)=>{
+    if(settings[key] !== undefined && settings[key] !== null && settings[key] !== '') acc[key] = settings[key];
+    return acc;
+  },{});
+}
+
+function persistBrowserSettings(settings={}){
+  try{
+    localStorage.removeItem(HRMS_LEGACY_STORAGE_KEY);
+    localStorage.setItem(HRMS_SETTINGS_STORAGE_KEY, JSON.stringify(getPersistableSettings(settings)));
+  } catch(err){
+    console.warn('تعذر حفظ إعدادات المتصفح الخفيفة', err);
+  }
+}
+
+function loadInitialAppData(){
+  const legacyData = parseStoredJson(HRMS_LEGACY_STORAGE_KEY, {});
+  const storedSettings = parseStoredJson(HRMS_SETTINGS_STORAGE_KEY, {});
+  const initialData = legacyData && typeof legacyData === 'object' && !Array.isArray(legacyData)
+    ? legacyData
+    : {};
+  initialData.settings = {
+    ...(initialData.settings || {}),
+    ...(storedSettings || {})
+  };
+  persistBrowserSettings(initialData.settings);
+  return initialData;
+}
+
+let appData = loadInitialAppData();
 function ensureAppDataShape(){
   if(!appData || typeof appData !== 'object') appData = {};
   if(!appData.employees) appData.employees = [];
@@ -62,6 +115,7 @@ let prevPage = null;
 let editingEmpId = null;
 let currentProfileId = null;
 let currentDocType = null;
+let photoCropState = null;
 let editingEmployerId = null;
 let empSegments = [];
 let selectedDay = null;
@@ -76,6 +130,7 @@ let selectedSaveDirectoryHandle = null;
 let folderSyncTimer = null;
 let folderSyncRunning = false;
 let folderSyncPending = false;
+let folderAutoImportRunning = false;
 let firebasePublisherScriptPromise = null;
 let fingerprintPlaceSessionId = null;
 let fingerprintPlaceSessionUnsubscribe = null;
@@ -93,7 +148,7 @@ const FINGERPRINT_MAP_DEFAULT_CENTER = {lat:29.342263, lng:48.018131};
 
 function saveData(options={}){
   ensureAppDataShape();
-  localStorage.setItem('hrmsData',JSON.stringify(appData));
+  persistBrowserSettings(appData.settings);
   if(options.sync !== false) queueFolderSync();
 }
 
@@ -1108,7 +1163,7 @@ function normalizeImportedHrData(source){
 
 function refreshAppAfterDataLoad(){
   ensureAppDataShape();
-  localStorage.setItem('hrmsData',JSON.stringify(appData));
+  persistBrowserSettings(appData.settings);
   applyTheme(appData.settings?.theme || 'light');
   renderFolderSettings();
   renderEmployees();
@@ -1791,8 +1846,8 @@ function setFolderStatus(message, type=''){
   const sub = document.getElementById('databaseStorageSub');
   if(sub){
     sub.textContent = selectedSaveDirectoryHandle
-      ? 'تخزين محلي + ملفات منظمة داخل مجلد الجهاز'
-      : 'تخزين محلي + مزامنة ملفات عند اختيار مجلد';
+      ? 'إعدادات محلية فقط + قراءة البيانات من مجلد الجهاز'
+      : 'إعدادات محلية فقط + اختر مجلد قاعدة البيانات للقراءة والحفظ';
   }
 }
 
@@ -1889,7 +1944,7 @@ async function restoreSavedDirectoryHandle(){
     }
     selectedSaveDirectoryHandle = handle;
     appData.settings.saveFolderName = handle.name;
-    localStorage.setItem('hrmsData',JSON.stringify(appData));
+    persistBrowserSettings(appData.settings);
     renderFolderSettings();
     const hasPermission = await ensureDirectoryPermission(handle,false);
     if(hasPermission){
@@ -1920,6 +1975,42 @@ function queueFolderSync(){
   if(!selectedSaveDirectoryHandle) return;
   clearTimeout(folderSyncTimer);
   folderSyncTimer = setTimeout(()=>syncDataToFolder(false),500);
+}
+
+function pageUsesFolderData(page){
+  return [
+    'employees',
+    'addEmployee',
+    'schedule',
+    'fingerprint',
+    'fingerprintCodes',
+    'fingerprintPlaces',
+    'reminders',
+    'notifications',
+    'bookGeneral',
+    'bookDeduct',
+    'bookWarn',
+    'bookNotice',
+    'decisions',
+    'employers',
+    'addEmployer',
+    'profile'
+  ].includes(page);
+}
+
+async function ensureFolderDataForPage(page){
+  if(!pageUsesFolderData(page) || hasMeaningfulHrData() || !selectedSaveDirectoryHandle || folderAutoImportRunning) return;
+  folderAutoImportRunning = true;
+  try{
+    const imported = await tryImportDataFromFolder({silent:true, overwrite:true});
+    if(imported.imported){
+      setFolderStatus(imported.empty
+        ? 'تم تحميل قاعدة بيانات فارغة من المجلد. جاهزة للإضافة والحفظ.'
+        : `تم قراءة البيانات من المجلد: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
+    }
+  } finally {
+    folderAutoImportRunning = false;
+  }
 }
 
 const scheduleBranchNames = {
@@ -1997,7 +2088,40 @@ const taskPhraseTranslations = {
   'مشتريات':'Purchasing',
   'توصيل':'Delivery',
   'الارشيف':'Archive',
-  'الأرشيف':'Archive'
+  'الأرشيف':'Archive',
+  'تصميم':'Design',
+  'مصمم':'Designer',
+  'مصممة':'Designer',
+  'عامل تنظيف':'Cleaning worker',
+  'عامل نظافة':'Cleaner',
+  'عامل تنظيف/أدوات مطبخ':'Cleaning worker / kitchen tools',
+  'عامل تنظيف/ادوات مطبخ':'Cleaning worker / kitchen tools',
+  'أدوات مطبخ':'Kitchen tools',
+  'ادوات مطبخ':'Kitchen tools',
+  'صانع معجنات وفطائر':'Pastry and pies maker',
+  'صانع معجنات':'Pastry maker',
+  'صانع فطائر':'Pie maker',
+  'سائق سيارة خصوصي':'Private driver',
+  'بادل طعام':'Food server',
+  'طباخ':'Cook',
+  'مساعد طباخ':'Assistant cook',
+  'عامل مطبخ':'Kitchen worker',
+  'مدير مبيعات':'Sales manager',
+  'مندوب مبيعات':'Sales representative',
+  'محاسب':'Accountant',
+  'مدخل بيانات':'Data entry clerk',
+  'مراقب جودة':'Quality controller',
+  'مطعم التين الطبيعي':'Figs and Olives Restaurant',
+  'فرع حولي':'Hawally Branch',
+  'حولي':'Hawally',
+  'فرع أبو الحصانية':'Abu Al Hasaniya Branch',
+  'فرع ابو الحصانية':'Abu Al Hasaniya Branch',
+  'أبو الحصانية':'Abu Al Hasaniya',
+  'ابو الحصانية':'Abu Al Hasaniya',
+  'فرع اليرموك':'Yarmouk Branch',
+  'اليرموك':'Yarmouk',
+  'فرع السرة':'Hawally Branch',
+  'السرة':'Hawally'
 };
 
 const taskWordTranslations = {
@@ -2007,6 +2131,10 @@ const taskWordTranslations = {
   'فرع':'branch','الفرع':'branch','جرد':'inventory','الجرد':'inventory','مخزون':'stock','المخزون':'stock','ادارة':'management','إدارة':'management',
   'موظفين':'staff','الموظفين':'staff','موظف':'employee','استلام':'receiving','تسليم':'handover','توصيل':'delivery','مشتريات':'purchasing',
   'ارشيف':'archive','أرشيف':'archive','الأرشيف':'archive','مهمة':'task','مهام':'tasks','عمل':'work'
+  ,'تصميم':'design','مصمم':'designer','مصممة':'designer','عامل':'worker','عاملة':'worker','نظافة':'cleaning','مطبخ':'kitchen','ادوات':'tools','أدوات':'tools'
+  ,'طباخ':'cook','معجنات':'pastry','فطائر':'pies','صانع':'maker','سائق':'driver','سيارة':'car','خصوصي':'private','بادل':'server','طعام':'food'
+  ,'محاسب':'accountant','مدير':'manager','مندوب':'representative','مراقب':'controller','جودة':'quality','مطعم':'restaurant','التين':'figs','الطبيعي':'olives'
+  ,'حولي':'Hawally','السرة':'Hawally','اليرموك':'Yarmouk','الحصانية':'Hasaniya','أبو':'Abu','ابو':'Abu'
 };
 
 const schedulePhraseTranslations = {
@@ -2028,6 +2156,32 @@ const schedulePhraseTranslations = {
   'خدمة العملاء':'Customer service',
   'عامل نظافة':'Cleaner',
   'عامل تنظيف':'Cleaner',
+  'عامل تنظيف/أدوات مطبخ':'Cleaning worker / kitchen tools',
+  'عامل تنظيف/ادوات مطبخ':'Cleaning worker / kitchen tools',
+  'أدوات مطبخ':'Kitchen tools',
+  'ادوات مطبخ':'Kitchen tools',
+  'صانع معجنات وفطائر':'Pastry and pies maker',
+  'صانع معجنات':'Pastry maker',
+  'صانع فطائر':'Pie maker',
+  'سائق سيارة خصوصي':'Private driver',
+  'بادل طعام':'Food server',
+  'عامل مطبخ':'Kitchen worker',
+  'طباخ':'Cook',
+  'مساعد طباخ':'Assistant cook',
+  'مدير مبيعات':'Sales manager',
+  'مندوب مبيعات':'Sales representative',
+  'محاسب':'Accountant',
+  'مطعم التين الطبيعي':'Figs and Olives Restaurant',
+  'فرع حولي':'Hawally Branch',
+  'حولي':'Hawally',
+  'فرع أبو الحصانية':'Abu Al Hasaniya Branch',
+  'فرع ابو الحصانية':'Abu Al Hasaniya Branch',
+  'أبو الحصانية':'Abu Al Hasaniya',
+  'ابو الحصانية':'Abu Al Hasaniya',
+  'فرع اليرموك':'Yarmouk Branch',
+  'اليرموك':'Yarmouk',
+  'فرع السرة':'Hawally Branch',
+  'السرة':'Hawally',
   'تحضير':'Preparation',
   'تحضير الطلبات':'Order preparation',
   'مراقبة الجودة':'Quality control',
@@ -2048,6 +2202,9 @@ const scheduleWordTranslations = {
   'تسويق':'marketing','التسويق':'marketing','اداري':'administrative','إداري':'administrative','ادارية':'administrative','إدارية':'administrative',
   'مشرف':'supervisor','مشرفة':'supervisor','مدير':'manager','مديرة':'manager','مساعد':'assistant','مساعدة':'assistant',
   'عامل':'worker','عاملة':'worker','تنظيف':'cleaning','نظافة':'cleaning','مطبخ':'kitchen','ادوات':'tools','أدوات':'tools',
+  'طباخ':'cook','معجنات':'pastry','فطائر':'pies','صانع':'maker','سائق':'driver','سيارة':'car','خصوصي':'private','بادل':'server','طعام':'food',
+  'محاسب':'accountant','مندوب':'representative','مطعم':'restaurant','التين':'figs','الطبيعي':'olives','حولي':'Hawally','السرة':'Hawally',
+  'اليرموك':'Yarmouk','الحصانية':'Hasaniya','أبو':'Abu','ابو':'Abu',
   'جودة':'quality','الجودة':'quality','مراقبة':'monitoring','حسابات':'accounts','التواصل':'communication','اجتماعي':'social','اجتماعيه':'social',
   'دقائق':'minutes','دقيقة':'minute','ساعة':'hour','ساعات':'hours','دخول':'check-in','خروج':'check-out','تأخير':'late','مغادرة':'leaving','مبكرة':'early',
   'اذن':'permission','إذن':'permission'
@@ -2082,12 +2239,58 @@ function transliterateArabicToEnglish(text){
   return converted.replace(/\s+/g,' ').trim() || 'Employee';
 }
 
+function getEmployeeFirstName(name){
+  return String(name || '').trim().split(/\s+/).filter(Boolean)[0] || '';
+}
+
+function getEmployeeScheduleName(value){
+  const name = typeof value === 'object' ? (value?.name || '') : String(value || '');
+  if(name.includes('احمد رزق') || name.includes('شوشه') || name.includes('شوشة')) return 'احمد شوشة';
+  if(name.includes('احمد محمد')) return 'احمد محمد';
+  return getEmployeeFirstName(name) || name || 'موظف';
+}
+
+function getEmployeeDisplayPhoto(emp){
+  return getUsableImageSource(emp?.photoData, emp?.documents?.photo?.fileData);
+}
+
 function employeeNameForPdf(name, lang='ar'){
-  return lang === 'en' ? transliterateArabicToEnglish(name) : (name || '');
+  const firstName = getEmployeeScheduleName(name);
+  return lang === 'en' ? transliterateArabicToEnglish(firstName) : firstName;
 }
 
 function translateTaskToEnglish(task){
   return translateScheduleTextToEnglish(task);
+}
+
+function normalizeTranslationKey(value){
+  return stripArabicDiacritics(value)
+    .replace(/[إأآ]/g,'ا')
+    .replace(/ى/g,'ي')
+    .replace(/[ة]/g,'ه')
+    .replace(/[^\u0600-\u06FFA-Za-z0-9]+/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+
+function findTranslation(value, dictionary){
+  const direct = dictionary[value];
+  if(direct) return direct;
+  const normalized = normalizeTranslationKey(value);
+  const key = Object.keys(dictionary).find(item=>normalizeTranslationKey(item) === normalized);
+  return key ? dictionary[key] : '';
+}
+
+function replaceRemainingArabicWithTranslatedWords(text){
+  return String(text || '').split(/([,+\/-])/).map(segment=>{
+    if(!/[\u0600-\u06FF]/.test(segment)) return segment;
+    const words = segment.split(/\s+/).map(word=>{
+      const clean = word.replace(/[^\u0600-\u06FF]/g,'');
+      if(!clean) return '';
+      return findTranslation(clean,scheduleWordTranslations);
+    }).filter(Boolean);
+    return words.length ? titleCase(words.join(' ')) : 'Work task';
+  }).join('').replace(/\s*([,+\/-])\s*/g,' $1 ').replace(/\s+/g,' ').trim();
 }
 
 function translateScheduleTextToEnglish(text){
@@ -2097,7 +2300,8 @@ function translateScheduleTextToEnglish(text){
     .trim();
   if(!normalized) return '';
   if(!/[\u0600-\u06FF]/.test(normalized)) return titleCase(normalized);
-  if(schedulePhraseTranslations[normalized]) return schedulePhraseTranslations[normalized];
+  const exact = findTranslation(normalized,schedulePhraseTranslations);
+  if(exact) return exact;
   let replaced = normalized;
   Object.keys(schedulePhraseTranslations)
     .sort((a,b)=>b.length-a.length)
@@ -2105,13 +2309,14 @@ function translateScheduleTextToEnglish(text){
       if(replaced.includes(phrase)) replaced = replaced.replaceAll(phrase, schedulePhraseTranslations[phrase]);
     });
   if(!/[\u0600-\u06FF]/.test(replaced)) return replaced;
-  return replaced.split(/(\s+|,|\+|\/|-)/).map(part=>{
+  const wordTranslated = replaced.split(/(\s+|,|\+|\/|-)/).map(part=>{
     if(!part.trim() || /^[,\+\/-]$/.test(part)) return part;
     const clean = part.replace(/[^\u0600-\u06FFA-Za-z0-9]/g,'');
-    if(scheduleWordTranslations[clean]) return part.replace(clean,scheduleWordTranslations[clean]);
-    if(/[\u0600-\u06FF]/.test(clean)) return part.replace(clean,transliterateArabicToEnglish(clean));
+    const translatedWord = findTranslation(clean,scheduleWordTranslations);
+    if(translatedWord) return part.replace(clean,translatedWord);
     return part;
   }).join('').replace(/\s+/g,' ').trim();
+  return replaceRemainingArabicWithTranslatedWords(wordTranslated);
 }
 
 function tasksForPdf(tasks, lang='ar'){
@@ -2321,7 +2526,7 @@ function drawScheduleCanvasToJpegDataUrl(dayKey, schedule, title, lang='ar', app
   const zones = ['surra','abulhasania','yarmouk'];
   const notes = normalizeScheduleNotes(schedule?.notes || [], schedule);
   const maxCardsPerRow = 3;
-  const cardH = 150;
+  const cardH = 174;
   let height = 230;
   zones.forEach(zone=>{
     const count = Math.max(1,(schedule.zones?.[zone] || []).length);
@@ -2399,13 +2604,13 @@ function drawScheduleCanvasToJpegDataUrl(dayKey, schedule, title, lang='ar', app
         ctx.fillStyle = color;
         ctx.fill();
         ctx.fillStyle = '#ffffff';
-        ctx.font = '900 28px Arial, sans-serif';
+        ctx.font = '900 30px Arial, sans-serif';
         ctx.textAlign = isEn ? 'left' : 'right';
-        drawTextLines(ctx,employeeNameForPdf(item.empName,lang),isEn ? cardX+18 : cardX+cardW-18,cardY+18,cardW-36,34,2);
-        ctx.font = '900 21px Arial, sans-serif';
-        ctx.fillText(formatTimeRangeLocalized(item.from,item.to,lang),isEn ? cardX+18 : cardX+cardW-18,cardY+82);
-        ctx.font = '700 16px Arial, sans-serif';
-        drawTextLines(ctx,tasksForPdf(item.tasks,lang),isEn ? cardX+18 : cardX+cardW-18,cardY+112,cardW-36,22,1);
+        drawTextLines(ctx,employeeNameForPdf(item.empName,lang),isEn ? cardX+18 : cardX+cardW-18,cardY+16,cardW-36,36,2);
+        ctx.font = '900 24px Arial, sans-serif';
+        ctx.fillText(formatTimeRangeLocalized(item.from,item.to,lang),isEn ? cardX+18 : cardX+cardW-18,cardY+88);
+        ctx.font = '800 23px Arial, sans-serif';
+        drawTextLines(ctx,tasksForPdf(item.tasks,lang),isEn ? cardX+18 : cardX+cardW-18,cardY+124,cardW-36,29,2);
       });
     }
     y += sectionH + 28;
@@ -2734,7 +2939,7 @@ async function tryImportDataFromFolder({silent=false, overwrite=true}={}){
       applyImportedHrData(loaded.data,'folder');
       appData.settings.saveFolderName = selectedSaveDirectoryHandle.name;
       appData.settings.importedAt = new Date().toISOString();
-      localStorage.setItem('hrmsData',JSON.stringify(appData));
+      persistBrowserSettings(appData.settings);
       renderFolderSettings();
       setFolderStatus(`تم تجهيز قاعدة بيانات فارغة من ${loaded.source || 'المجلد المختار'}. يمكنك الآن البدء بالإضافة والمزامنة.`, 'success');
       if(!silent) showToast('تم تجهيز قاعدة بيانات جديدة');
@@ -2756,7 +2961,7 @@ async function tryImportDataFromFolder({silent=false, overwrite=true}={}){
     applyImportedHrData(loaded.data,'folder');
     appData.settings.saveFolderName = selectedSaveDirectoryHandle.name;
     appData.settings.importedAt = new Date().toISOString();
-    localStorage.setItem('hrmsData',JSON.stringify(appData));
+    persistBrowserSettings(appData.settings);
     renderFolderSettings();
     setFolderStatus(`تم استيراد البيانات من ${loaded.source}: ${appData.employees.length} موظف، ${Object.keys(appData.schedules || {}).length} جدول.`, 'success');
     if(!silent) showToast('تم استيراد البيانات من المجلد');
@@ -2823,9 +3028,9 @@ async function syncDataToFolder(userTriggered=false){
     const syncedAt = new Date().toISOString();
     appData.settings.saveFolderName = selectedSaveDirectoryHandle.name;
     appData.settings.lastFileSyncAt = syncedAt;
-    localStorage.setItem('hrmsData',JSON.stringify(appData));
+    persistBrowserSettings(appData.settings);
     const result = await writeHrmsFilesToDirectory(selectedSaveDirectoryHandle,syncedAt);
-    localStorage.setItem('hrmsData',JSON.stringify(appData));
+    persistBrowserSettings(appData.settings);
     renderFolderSettings();
     const localSyncMessage = `تمت المزامنة: ${result.employees} موظف، ${result.documents} مستند، ${result.schedules} جدول، ${result.pdfs || 0} PDF.`;
     if(userTriggered){
@@ -2877,6 +3082,7 @@ function updatePinDisplay(){
 
 function tryLogin(){
   if(pinValue === CORRECT_PIN){
+    try{ localStorage.setItem('hrmsLoggedIn','true'); }catch(err){}
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('mainApp').style.display = 'flex';
     document.getElementById('mainApp').classList.add('show');
@@ -2895,6 +3101,7 @@ function tryLogin(){
 }
 
 function logout(){
+  try{ localStorage.removeItem('hrmsLoggedIn'); }catch(err){}
   document.getElementById('mainApp').style.display='none';
   document.getElementById('loginScreen').classList.remove('hidden');
   document.getElementById('loginScreen').style.display='flex';
@@ -2984,6 +3191,7 @@ function navTo(page, el){
   document.getElementById('topbarTitle').textContent = titles[page]||'';
   document.getElementById('topbarBack').style.display = (page==='profile') ? 'flex' : 'none';
   document.getElementById('topbarActions').innerHTML = '';
+  ensureFolderDataForPage(page);
 
   if(page==='addEmployee'){
     if(!editingEmpId) resetAddForm();
@@ -3042,6 +3250,185 @@ function getCountryByCode(code){
 const avatarColors = ['#2563eb','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4'];
 function getAvatarColor(id){ return avatarColors[id.charCodeAt(0)%avatarColors.length];}
 
+function openPhotoCropForEmployee(empId){
+  const emp = appData.employees.find(e=>e.id === empId);
+  if(!emp) return;
+  const src = getEmployeeDisplayPhoto(emp);
+  if(src){
+    openPhotoCropModal(empId,src);
+  } else {
+    openDocModal('photo',empId);
+  }
+}
+
+function getPhotoCropImageBounds(){
+  const stage = document.getElementById('photoCropStage');
+  const img = document.getElementById('photoCropImage');
+  if(!stage || !img) return null;
+  const stageRect = stage.getBoundingClientRect();
+  const imgRect = img.getBoundingClientRect();
+  return {
+    left:imgRect.left - stageRect.left,
+    top:imgRect.top - stageRect.top,
+    width:imgRect.width,
+    height:imgRect.height
+  };
+}
+
+function renderPhotoCropBox(){
+  const box = document.getElementById('photoCropBox');
+  if(!box || !photoCropState?.box) return;
+  const {x,y,w,h} = photoCropState.box;
+  box.style.left = `${x}px`;
+  box.style.top = `${y}px`;
+  box.style.width = `${w}px`;
+  box.style.height = `${h}px`;
+}
+
+function resetPhotoCropBox(){
+  const bounds = getPhotoCropImageBounds();
+  if(!bounds || !bounds.width || !bounds.height || !photoCropState) return;
+  const size = Math.max(88, Math.min(bounds.width,bounds.height) * .72);
+  photoCropState.box = {
+    x:bounds.left + ((bounds.width - size) / 2),
+    y:bounds.top + ((bounds.height - size) / 2),
+    w:size,
+    h:size
+  };
+  renderPhotoCropBox();
+}
+
+function openPhotoCropModal(empId, source, pendingDocument=null){
+  const img = document.getElementById('photoCropImage');
+  if(!img) return;
+  photoCropState = {empId, source, pendingDocument, box:null, action:null, start:null};
+  img.onload = ()=>requestAnimationFrame(resetPhotoCropBox);
+  img.src = source;
+  openModal('photoCropModal');
+}
+
+function closePhotoCropModal(){
+  stopPhotoCropDrag();
+  photoCropState = null;
+  const img = document.getElementById('photoCropImage');
+  if(img){
+    img.onload = null;
+    img.removeAttribute('src');
+  }
+  closeModal('photoCropModal');
+}
+
+function startPhotoCropDrag(event, action='move'){
+  if(!photoCropState?.box) return;
+  event.preventDefault();
+  event.stopPropagation();
+  photoCropState.action = action;
+  photoCropState.start = {
+    x:event.clientX,
+    y:event.clientY,
+    box:{...photoCropState.box}
+  };
+  document.addEventListener('pointermove', onPhotoCropPointerMove);
+  document.addEventListener('pointerup', stopPhotoCropDrag, {once:true});
+}
+
+function clampNumber(value,min,max){
+  return Math.max(min,Math.min(max,value));
+}
+
+function onPhotoCropPointerMove(event){
+  if(!photoCropState?.start) return;
+  const bounds = getPhotoCropImageBounds();
+  if(!bounds) return;
+  const minSize = Math.min(96,bounds.width,bounds.height);
+  const start = photoCropState.start;
+  const dx = event.clientX - start.x;
+  const dy = event.clientY - start.y;
+  let {x,y,w,h} = start.box;
+  if(photoCropState.action === 'move'){
+    x = clampNumber(x + dx,bounds.left,bounds.left + bounds.width - w);
+    y = clampNumber(y + dy,bounds.top,bounds.top + bounds.height - h);
+  } else {
+    const right = x + w;
+    const bottom = y + h;
+    let size = w;
+    if(photoCropState.action === 'se') size = w + Math.max(dx,dy);
+    if(photoCropState.action === 'nw') size = w - Math.min(dx,dy);
+    if(photoCropState.action === 'ne') size = w + Math.max(dx,-dy);
+    if(photoCropState.action === 'sw') size = w + Math.max(-dx,dy);
+    const maxByCorner = {
+      se:Math.min(bounds.left + bounds.width - x,bounds.top + bounds.height - y),
+      nw:Math.min(right - bounds.left,bottom - bounds.top),
+      ne:Math.min(bounds.left + bounds.width - x,bottom - bounds.top),
+      sw:Math.min(right - bounds.left,bounds.top + bounds.height - y)
+    }[photoCropState.action] || Math.min(bounds.width,bounds.height);
+    size = clampNumber(size,minSize,maxByCorner);
+    if(photoCropState.action === 'nw'){
+      x = right - size;
+      y = bottom - size;
+    } else if(photoCropState.action === 'ne'){
+      y = bottom - size;
+    } else if(photoCropState.action === 'sw'){
+      x = right - size;
+    }
+    w = h = size;
+  }
+  photoCropState.box = {x,y,w,h};
+  renderPhotoCropBox();
+}
+
+function stopPhotoCropDrag(){
+  document.removeEventListener('pointermove', onPhotoCropPointerMove);
+  if(photoCropState){
+    photoCropState.action = null;
+    photoCropState.start = null;
+  }
+}
+
+function applyPhotoCrop(){
+  if(!photoCropState?.box) return;
+  const emp = appData.employees.find(e=>e.id === photoCropState.empId);
+  const img = document.getElementById('photoCropImage');
+  const bounds = getPhotoCropImageBounds();
+  if(!emp || !img || !bounds) return;
+  try{
+    const scaleX = img.naturalWidth / bounds.width;
+    const scaleY = img.naturalHeight / bounds.height;
+    const {x,y,w,h} = photoCropState.box;
+    const sx = clampNumber((x - bounds.left) * scaleX,0,img.naturalWidth);
+    const sy = clampNumber((y - bounds.top) * scaleY,0,img.naturalHeight);
+    const sw = clampNumber(w * scaleX,1,img.naturalWidth - sx);
+    const sh = clampNumber(h * scaleY,1,img.naturalHeight - sy);
+    const canvas = document.createElement('canvas');
+    canvas.width = 720;
+    canvas.height = 720;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(img,sx,sy,sw,sh,0,0,canvas.width,canvas.height);
+    const cropped = canvas.toDataURL('image/jpeg',.9);
+    if(!emp.documents) emp.documents = {};
+    const existing = emp.documents.photo || {};
+    const pending = photoCropState.pendingDocument || {};
+    emp.photoData = cropped;
+    emp.documents.photo = {
+      ...existing,
+      ...pending,
+      fileData:cropped,
+      fileName:pending.fileName || existing.fileName || 'الصورة الشخصية.jpg',
+      uploadedAt:pending.uploadedAt || existing.uploadedAt || new Date().toISOString()
+    };
+    saveData();
+    showToast('تم اعتماد إطار الصورة');
+    closePhotoCropModal();
+    openProfile(emp.id);
+    if(selectedDay) renderStaffSidebar();
+  } catch(err){
+    console.error(err);
+    showToast('تعذر قص الصورة. ارفع الصورة من الجهاز مباشرة ثم جرّب مرة أخرى.','error');
+  }
+}
+
 // ===== EMPLOYEES =====
 function renderEmployees(){
   const grid = document.getElementById('employeesGrid');
@@ -3090,7 +3477,7 @@ function onScheduleTypeChange(type){
 }
 
 function updateHoursBar(){
-  const totalH = parseInt(document.getElementById('empHours').value)||0;
+  const totalH = parseFloat(document.getElementById('empHours').value)||0;
   const bar = document.getElementById('empHoursBar');
   const usedH = empSegments.reduce((s,seg)=>s+seg.hours,0);
   const remaining = totalH - usedH;
@@ -3113,7 +3500,7 @@ function updateHoursBar(){
 }
 
 function openAddSegmentModal(){
-  const totalH = parseInt(document.getElementById('empHours').value)||0;
+  const totalH = parseFloat(document.getElementById('empHours').value)||0;
   if(!totalH){ showToast('أدخل عدد ساعات العمل أولاً','error'); return; }
   const selectedEmployer = appData.employers.find(employer=>employer.name === document.getElementById('empEmployer').value);
   fillEmployerSelect(document.getElementById('segEmployer'), selectedEmployer?.id || '', 'اختر جهة عمل الدوام...');
@@ -3144,7 +3531,7 @@ function saveSegment(){
   const fromMin = timeToMin(from), toMin = timeToMin(to);
   if(toMin <= fromMin){ showToast('وقت الانتهاء يجب أن يكون بعد وقت البداية','error'); return; }
   const hours = (toMin - fromMin)/60;
-  const totalH = parseInt(document.getElementById('empHours').value)||0;
+  const totalH = parseFloat(document.getElementById('empHours').value)||0;
   const usedH = empSegments.reduce((s,seg)=>s+seg.hours,0);
   if(hours > totalH - usedH){ showToast('تجاوز الحد الأقصى لساعات العمل','error'); return; }
   empSegments.push({from,to,hours,tasks,employerId:employer.id,employerName:employer.name});
@@ -3802,7 +4189,7 @@ function saveEmployee(){
       editingEmpId = null;
       showToast(`تم تعديل بيانات الموظف ${name} بنجاح`);
     } else {
-      const newEmp = {id:generateId(),name,civilId,nationality:nat,position:pos,employer:emp,employerId:employerRecord?.id || '',kwPhone,intlPhone,hours:parseInt(hours)||8,schedType,segments:[...normalizedSegments],documents:{},createdAt:new Date().toISOString()};
+      const newEmp = {id:generateId(),name,civilId,nationality:nat,position:pos,employer:emp,employerId:employerRecord?.id || '',kwPhone,intlPhone,hours:parseFloat(hours)||8,schedType,segments:[...normalizedSegments],documents:{},createdAt:new Date().toISOString()};
       appData.employees.push(newEmp);
       showToast(`تم إدراج الموظف ${name} بنجاح ✓`);
     }
@@ -3859,7 +4246,10 @@ function openProfile(id){
 
   const profileHtml = `
     <div class="profile-header">
-      <div class="profile-avatar" style="border-color:${getAvatarColor(emp.id)}55">${avatarHtml}</div>
+      <button type="button" class="profile-avatar profile-avatar-button" style="border-color:${getAvatarColor(emp.id)}55" onclick="openPhotoCropForEmployee('${emp.id}')" title="تحديد إطار الصورة الشخصية">
+        ${avatarHtml}
+        <span class="profile-avatar-hint">${photoSrc?'تعديل الإطار':'رفع صورة'}</span>
+      </button>
       <div>
         <div class="profile-name">${emp.name}</div>
         <div class="profile-position">${emp.position||'—'}</div>
@@ -3930,6 +4320,7 @@ function openDocModal(docType, empId){
   currentProfileId = empId;
   document.getElementById('docModalTitle').textContent = {photo:'الصورة الشخصية',civil:'البطاقة المدنية',passport:'جواز السفر',health:'كرت الصحة',degree:'الشهادة الجامعية'}[docType];
   document.getElementById('docFile').value='';
+  document.getElementById('docFile').accept = docType === 'photo' ? 'image/*' : 'image/*,.pdf';
   document.getElementById('docRenewDate').value='';
   document.getElementById('docExpireDate').value='';
   document.getElementById('docDatesSection').style.display = docType==='photo'?'none':'block';
@@ -3947,8 +4338,17 @@ function saveDocument(){
     const emp = appData.employees.find(x=>x.id===currentProfileId);
     if(!emp){ closeModal('docModal'); return; }
     if(!emp.documents) emp.documents={};
+    if(currentDocType === 'photo'){
+      closeModal('docModal');
+      openPhotoCropModal(currentProfileId,e.target.result,{
+        renewDate,
+        expireDate,
+        fileName:file.name,
+        uploadedAt:new Date().toISOString()
+      });
+      return;
+    }
     emp.documents[currentDocType] = {fileData:e.target.result,renewDate,expireDate,fileName:file.name,uploadedAt:new Date().toISOString()};
-    if(currentDocType==='photo') emp.photoData = e.target.result;
     if(expireDate){
       const reminderDate = new Date(expireDate);
       reminderDate.setMonth(reminderDate.getMonth()-1);
@@ -4262,15 +4662,18 @@ function renderScheduleZones(){
     const items = scheduleState.zones?.[zone]||[];
     el.innerHTML = items.length ? items.map((item,i)=>{
       const color = getScheduleItemColor(item);
+      const emp = appData.employees.find(employee=>employee.id === item.empId) || {};
+      const displayName = getEmployeeScheduleName(item.empName || emp.name);
       return `
       <div class="schedule-card-item" draggable="true" 
         style="background:${hexToRgba(color,.13)};border-color:${hexToRgba(color,.45)};color:${color}"
         ondragstart="dragFromZone(event,'${zone}',${i})"
         title="اضغط لإضافة ساعات">
-        <strong>${item.empName}</strong>
-        <div style="font-size:10px;font-weight:700;color:${color}">${escapeHtml(item.employerName || scheduleBranchNames[zone] || '')}</div>
-        <div style="font-size:11px">${formatTimeRange(item.from,item.to)}</div>
-        <div style="font-size:10px;color:#334155">${item.tasks?.join(' + ')||''}</div>
+        <div style="padding-left:18px">
+          <strong style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(displayName)}</strong>
+          <div style="font-size:11px;color:${color};font-weight:800">${formatTimeRange(item.from,item.to)}</div>
+          <div style="font-size:10px;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(item.tasks?.join(' + ')||'')}</div>
+        </div>
         <button onclick="removeFromZone('${zone}',${i})" style="position:absolute;top:4px;left:4px;background:none;border:none;color:${color};cursor:pointer;font-size:14px;line-height:1">×</button>
       </div>`;
     }).join('') : '<div style="padding:12px;font-size:12px;color:#94a3b8;text-align:center">اسحب موظفاً هنا</div>';
@@ -4369,16 +4772,20 @@ function renderStaffSidebar(){
   });
   const varEmps = appData.employees.filter(e=>e.schedType==='variable'||e.schedType==='fixed');
   sidebar.innerHTML = varEmps.length ? varEmps.map(emp=>{
-    const totalH = parseInt(emp.hours)||8;
+    const totalH = parseFloat(emp.hours)||8;
     const used = usedHours[emp.id]||0;
     const remaining = totalH - used;
     const depleted = remaining<=0;
+    const photoSrc = getEmployeeDisplayPhoto(emp);
+    const displayName = getEmployeeScheduleName(emp);
+    const avatarHtml = photoSrc
+      ? `<img src="${photoSrc}" alt="" style="width:32px;height:32px;border-radius:8px;object-fit:cover;flex-shrink:0">`
+      : `<div style="width:32px;height:32px;border-radius:8px;background:${getAvatarColor(emp.id)}33;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:${getAvatarColor(emp.id)};flex-shrink:0">${getInitials(emp.name)}</div>`;
     return `<div class="staff-card ${depleted?'depleted':''}" draggable="${depleted?'false':'true'}"
       ondragstart="dragStart(event,'${emp.id}')" id="staffCard-${emp.id}">
-      <div style="width:32px;height:32px;border-radius:8px;background:${getAvatarColor(emp.id)}33;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:${getAvatarColor(emp.id)};flex-shrink:0">${getInitials(emp.name)}</div>
+      ${avatarHtml}
       <div style="flex:1;min-width:0">
-        <div style="font-size:13px;font-weight:700;color:${depleted?'var(--text3)':'var(--heading)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${emp.name}</div>
-        <div style="font-size:11px;color:var(--text3)">${emp.position||''}</div>
+        <div style="font-size:13px;font-weight:700;color:${depleted?'var(--text3)':'var(--heading)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(displayName)}</div>
       </div>
       <div class="staff-hours-badge" style="background:${depleted?'rgba(16,185,129,.2)':'rgba(37,99,235,.2)'};color:${depleted?'var(--green)':'var(--accent2)'}">
         ${depleted?'✓ 0':'⏱ '+remaining}h
@@ -4449,7 +4856,7 @@ function saveScheduleSegment(){
   if(toMin<=fromMin){ showToast('وقت غير صحيح','error'); return; }
   const hours = (toMin-fromMin)/60;
   const usedH = Object.values(scheduleState.zones).flat().filter(x=>x.empId===pendingSchedEmpId).reduce((s,x)=>s+x.hours,0);
-  const totalH = parseInt(emp.hours)||8;
+  const totalH = parseFloat(emp.hours)||8;
   if(hours > totalH-usedH){ showToast(`تجاوزت ساعات الموظف (متبقي ${(totalH-usedH).toFixed(1)}h)`,'error'); return; }
   if(!scheduleState.zones) scheduleState.zones={surra:[],abulhasania:[],yarmouk:[]};
   scheduleState.zones[pendingSchedZone].push({
@@ -4532,7 +4939,7 @@ async function approveScheduleDay(){
         scheduleState.pdfEnglishFileName = savedPdfNames.en;
         scheduleState.pdfFileNames = savedPdfNames;
         appData.schedules[selectedDay] = JSON.parse(JSON.stringify(scheduleState));
-        localStorage.setItem('hrmsData',JSON.stringify(appData));
+        persistBrowserSettings(appData.settings);
         await syncDataToFolder(false);
         showToast(firebasePublished ? 'تم اعتماد التوزيع وحفظ PDF ونشره لتطبيق البصمة ✓' : 'تم اعتماد التوزيع وحفظ PDF، لكن تعذر نشره لتطبيق البصمة', firebasePublished ? 'success' : 'error');
       } else {
@@ -4639,4 +5046,19 @@ window.addEventListener('DOMContentLoaded', ()=>{
   setupTimePickers();
   restoreSavedDirectoryHandle();
   updatePinDisplay();
+  let isLoggedIn = false;
+  try{ isLoggedIn = localStorage.getItem('hrmsLoggedIn') === 'true'; }catch(err){}
+  if(isLoggedIn){
+    const loginScreen = document.getElementById('loginScreen');
+    const mainApp = document.getElementById('mainApp');
+    if(loginScreen) {
+      loginScreen.classList.add('hidden');
+      loginScreen.style.display = 'none';
+    }
+    if(mainApp) {
+      mainApp.style.display = 'flex';
+      mainApp.classList.add('show');
+    }
+    initApp();
+  }
 });
