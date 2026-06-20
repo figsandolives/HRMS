@@ -279,6 +279,7 @@ function getFirebaseEmployeesPayload(){
       position:emp.position || '',
       employer:emp.employer || '',
       employerId:employer?.id || emp.employerId || '',
+      photoData:getUsableImageSource(emp.photoData, emp.documents?.photo?.fileData) || '',
       hours:emp.hours || 8,
       schedType:emp.schedType || 'fixed',
       segments:(emp.segments || []).map(seg=>({
@@ -3212,6 +3213,29 @@ function toEnglishDigits(el){
   el.value = el.value.replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[^0-9]/g,'');
 }
 
+function normalizeDecimalString(value){
+  const normalized = normalizeDigits(value)
+    .replace(/[٫،,]/g,'.')
+    .replace(/[^0-9.]/g,'');
+  const [whole, ...fractions] = normalized.split('.');
+  if(!fractions.length) return whole;
+  return `${whole || '0'}.${fractions.join('')}`;
+}
+
+function toEnglishDecimal(el){
+  el.value = normalizeDecimalString(el.value);
+}
+
+function parseHoursValue(value){
+  const parsed = parseFloat(normalizeDecimalString(value));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatHoursValue(value){
+  const rounded = Math.round((Number(value) || 0) * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded).replace(/\.?0+$/,'');
+}
+
 function showLoading(msg='جاري الحفظ...'){
   document.getElementById('loadingText').textContent = msg;
   document.getElementById('loadingScreen').classList.add('show');
@@ -3477,10 +3501,10 @@ function onScheduleTypeChange(type){
 }
 
 function updateHoursBar(){
-  const totalH = parseFloat(document.getElementById('empHours').value)||0;
+  const totalH = parseHoursValue(document.getElementById('empHours').value);
   const bar = document.getElementById('empHoursBar');
   const usedH = empSegments.reduce((s,seg)=>s+seg.hours,0);
-  const remaining = totalH - usedH;
+  const remaining = Math.max(0, totalH - usedH);
   bar.innerHTML = '';
   const colors = ['#2563eb','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899'];
   empSegments.forEach((seg,i)=>{
@@ -3494,13 +3518,13 @@ function updateHoursBar(){
   if(remaining>0||totalH===0){
     const rem = document.createElement('div');
     rem.className = 'hours-bar-remaining';
-    rem.textContent = totalH>0 ? `${remaining} ساعة متبقية` : 'أدخل عدد ساعات العمل أولاً';
+    rem.textContent = totalH>0 ? `${formatHoursValue(remaining)} ساعة متبقية` : 'أدخل عدد ساعات العمل أولاً';
     bar.appendChild(rem);
   }
 }
 
 function openAddSegmentModal(){
-  const totalH = parseFloat(document.getElementById('empHours').value)||0;
+  const totalH = parseHoursValue(document.getElementById('empHours').value);
   if(!totalH){ showToast('أدخل عدد ساعات العمل أولاً','error'); return; }
   const selectedEmployer = appData.employers.find(employer=>employer.name === document.getElementById('empEmployer').value);
   fillEmployerSelect(document.getElementById('segEmployer'), selectedEmployer?.id || '', 'اختر جهة عمل الدوام...');
@@ -3531,9 +3555,9 @@ function saveSegment(){
   const fromMin = timeToMin(from), toMin = timeToMin(to);
   if(toMin <= fromMin){ showToast('وقت الانتهاء يجب أن يكون بعد وقت البداية','error'); return; }
   const hours = (toMin - fromMin)/60;
-  const totalH = parseFloat(document.getElementById('empHours').value)||0;
+  const totalH = parseHoursValue(document.getElementById('empHours').value);
   const usedH = empSegments.reduce((s,seg)=>s+seg.hours,0);
-  if(hours > totalH - usedH){ showToast('تجاوز الحد الأقصى لساعات العمل','error'); return; }
+  if(hours > (totalH - usedH) + 0.001){ showToast('تجاوز الحد الأقصى لساعات العمل','error'); return; }
   empSegments.push({from,to,hours,tasks,employerId:employer.id,employerName:employer.name});
   updateHoursBar();
   renderSegmentsList();
@@ -4167,7 +4191,8 @@ function saveEmployee(){
   const emp = document.getElementById('empEmployer').value;
   const kwPhone = document.getElementById('empKwPhone').value.trim();
   const intlPhone = document.getElementById('empIntlPhone').value.trim();
-  const hours = document.getElementById('empHours').value.trim();
+  const hours = normalizeDecimalString(document.getElementById('empHours').value.trim());
+  const hoursValue = parseHoursValue(hours);
   const schedType = document.querySelector('input[name="schedType"]:checked')?.value||'fixed';
 
   if(!name||!nat||!pos||!emp){ showToast('يرجى ملء الحقول المطلوبة','error'); return; }
@@ -4184,12 +4209,12 @@ function saveEmployee(){
     if(editingEmpId){
       const idx = appData.employees.findIndex(e=>e.id===editingEmpId);
       if(idx>=0){
-        appData.employees[idx] = {...appData.employees[idx],name,civilId,nationality:nat,position:pos,employer:emp,employerId:employerRecord?.id || '',kwPhone,intlPhone,hours,schedType,segments:normalizedSegments};
+        appData.employees[idx] = {...appData.employees[idx],name,civilId,nationality:nat,position:pos,employer:emp,employerId:employerRecord?.id || '',kwPhone,intlPhone,hours:hoursValue||8,schedType,segments:normalizedSegments};
       }
       editingEmpId = null;
       showToast(`تم تعديل بيانات الموظف ${name} بنجاح`);
     } else {
-      const newEmp = {id:generateId(),name,civilId,nationality:nat,position:pos,employer:emp,employerId:employerRecord?.id || '',kwPhone,intlPhone,hours:parseFloat(hours)||8,schedType,segments:[...normalizedSegments],documents:{},createdAt:new Date().toISOString()};
+      const newEmp = {id:generateId(),name,civilId,nationality:nat,position:pos,employer:emp,employerId:employerRecord?.id || '',kwPhone,intlPhone,hours:hoursValue||8,schedType,segments:[...normalizedSegments],documents:{},createdAt:new Date().toISOString()};
       appData.employees.push(newEmp);
       showToast(`تم إدراج الموظف ${name} بنجاح ✓`);
     }
@@ -4772,9 +4797,9 @@ function renderStaffSidebar(){
   });
   const varEmps = appData.employees.filter(e=>e.schedType==='variable'||e.schedType==='fixed');
   sidebar.innerHTML = varEmps.length ? varEmps.map(emp=>{
-    const totalH = parseFloat(emp.hours)||8;
+    const totalH = parseHoursValue(emp.hours)||8;
     const used = usedHours[emp.id]||0;
-    const remaining = totalH - used;
+    const remaining = Math.max(0, totalH - used);
     const depleted = remaining<=0;
     const photoSrc = getEmployeeDisplayPhoto(emp);
     const displayName = getEmployeeScheduleName(emp);
@@ -4788,7 +4813,7 @@ function renderStaffSidebar(){
         <div style="font-size:13px;font-weight:700;color:${depleted?'var(--text3)':'var(--heading)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(displayName)}</div>
       </div>
       <div class="staff-hours-badge" style="background:${depleted?'rgba(16,185,129,.2)':'rgba(37,99,235,.2)'};color:${depleted?'var(--green)':'var(--accent2)'}">
-        ${depleted?'✓ 0':'⏱ '+remaining}h
+        ${depleted?'✓ 0':'⏱ '+formatHoursValue(remaining)}h
       </div>
     </div>`;
   }).join('') : '<div style="color:var(--text3);font-size:13px;text-align:center;padding:20px">لا يوجد موظفون</div>';
@@ -4856,8 +4881,8 @@ function saveScheduleSegment(){
   if(toMin<=fromMin){ showToast('وقت غير صحيح','error'); return; }
   const hours = (toMin-fromMin)/60;
   const usedH = Object.values(scheduleState.zones).flat().filter(x=>x.empId===pendingSchedEmpId).reduce((s,x)=>s+x.hours,0);
-  const totalH = parseFloat(emp.hours)||8;
-  if(hours > totalH-usedH){ showToast(`تجاوزت ساعات الموظف (متبقي ${(totalH-usedH).toFixed(1)}h)`,'error'); return; }
+  const totalH = parseHoursValue(emp.hours)||8;
+  if(hours > (totalH-usedH) + 0.001){ showToast(`تجاوزت ساعات الموظف (متبقي ${formatHoursValue(Math.max(0,totalH-usedH))}h)`,'error'); return; }
   if(!scheduleState.zones) scheduleState.zones={surra:[],abulhasania:[],yarmouk:[]};
   scheduleState.zones[pendingSchedZone].push({
     empId:emp.id,

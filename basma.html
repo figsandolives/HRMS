@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
-<head> 
+<head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>تقرير البصمة</title>
@@ -44,8 +44,9 @@ body{font-family:'Tajawal',sans-serif;background:var(--bg);color:var(--text);min
 .fingerprint-table{width:100%;border-collapse:separate;border-spacing:0;min-width:760px;font-family:'Cairo',sans-serif}
 .fingerprint-table th,.fingerprint-table td{border-left:1px solid var(--border);border-bottom:1px solid var(--border);padding:9px 10px;min-width:78px;height:42px;text-align:center;font-size:12px;white-space:nowrap}
 .fingerprint-table th{background:var(--panel2);color:var(--heading);font-weight:800;position:sticky;top:0;z-index:2}
-.fingerprint-table th:first-child,.fingerprint-table td:first-child{position:sticky;right:0;z-index:3;background:var(--panel3);width:1%;min-width:96px;max-width:260px;text-align:right;font-weight:800;color:var(--heading)}
-.fingerprint-table th:first-child{background:var(--panel2);z-index:4}
+.fingerprint-table .row-number{width:44px;min-width:44px;max-width:44px;text-align:center;font-weight:900;color:var(--text2)}
+.fingerprint-table .employee-name-cell{position:sticky;right:0;z-index:3;background:var(--panel3);width:1%;min-width:180px;max-width:280px;text-align:right;font-weight:800;color:var(--heading)}
+.fingerprint-table th.employee-name-cell{background:var(--panel2);z-index:4}
 .fingerprint-cell{position:relative;color:var(--text2)}
 .fingerprint-cell.bridge{box-shadow:inset 0 0 0 9999px var(--bridge-color)}
 .fingerprint-hit{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:48px;min-height:34px;padding:5px 9px;border-radius:12px;color:#fff;font-size:11px;font-weight:800;line-height:1.25;background:var(--hit-color);border:0;cursor:pointer;font-family:'Cairo',sans-serif}
@@ -209,10 +210,7 @@ function setConnectionStatus(text,type=''){
 }
 
 function returnToSystem(){
-  if(window.history.length > 1){
-    window.history.back();
-    return;
-  }
+  try{ localStorage.setItem('hrmsLoggedIn','true'); }catch(err){}
   window.location.href = 'index.html';
 }
 
@@ -272,9 +270,26 @@ function getInitials(name){
   return String(name || 'موظف').trim().split(/\s+/).slice(0,2).map(part=>part[0] || '').join('');
 }
 
+function extractImageSource(value){
+  if(!value) return '';
+  if(typeof value === 'object'){
+    return extractImageSource(value.fileData || value.photoData || value.dataUrl || value.url || value.src);
+  }
+  const source = String(value || '').trim();
+  return /^data:image\//.test(source) || /^https?:\/\//.test(source) ? source : '';
+}
+
 function getEmployeePhoto(emp){
-  const value = String(emp?.photoData || '').trim();
-  return /^data:image\//.test(value) || /^https?:\/\//.test(value) ? value : '';
+  return extractImageSource(
+    emp?.photoData ||
+    emp?.photo ||
+    emp?.profilePhoto ||
+    emp?.avatar ||
+    emp?.empPhoto ||
+    emp?.documents?.photo ||
+    emp?.documents?.personalPhoto ||
+    emp?.documents?.profilePhoto
+  );
 }
 
 function getEmployeeName(empId){
@@ -306,18 +321,37 @@ function normalizeEmployees(value){
 function normalizePunches(value){
   return Object.entries(value || {}).map(([id,punch])=>({
     id,
-    ...punch
+    ...punch,
+    empId:punch.empId || punch.employeeId || punch.employee?.id || '',
+    empName:punch.empName || punch.employeeName || punch.employee?.name || '',
+    photoData:punch.photoData || punch.empPhoto || punch.employee?.photoData || ''
   })).sort((a,b)=>String(a.iso || '').localeCompare(String(b.iso || '')));
 }
 
 function getEmployeesForReport(){
-  if(state.employees.length) return state.employees;
-  const byId = {};
+  const byId = new Map();
+  const addEmployee = emp=>{
+    if(!emp?.id) return;
+    const existing = byId.get(emp.id) || {};
+    byId.set(emp.id,{
+      ...existing,
+      ...emp,
+      name:existing.name || emp.name || emp.empName || emp.id,
+      position:existing.position || emp.position || '',
+      employer:existing.employer || emp.employer || '',
+      photoData:existing.photoData || emp.photoData || emp.photo || emp.profilePhoto || emp.avatar || ''
+    });
+  };
+  state.employees.forEach(addEmployee);
   state.punches.forEach(punch=>{
     if(!punch.empId) return;
-    byId[punch.empId] = {id:punch.empId, name:punch.empName || punch.empId};
+    addEmployee({
+      id:punch.empId,
+      name:punch.empName || punch.employeeName || punch.empId,
+      photoData:punch.photoData || punch.empPhoto || punch.photo || ''
+    });
   });
-  return Object.values(byId).sort((a,b)=>String(a.name).localeCompare(String(b.name),'ar'));
+  return Array.from(byId.values()).sort((a,b)=>String(a.name).localeCompare(String(b.name),'ar'));
 }
 
 function getPunchDate(punch){
@@ -486,10 +520,24 @@ function buildFingerprintSummary(totals){
   </div>`;
 }
 
+function getPunchDisplayParts(punch, row, sortedPunches){
+  const issueLabel = getPunchIssueLabel(punch,row,sortedPunches);
+  const punchTime = formatTimeValue(getPunchTime(punch));
+  const typeLabel = getPunchTypeLabel(punch,sortedPunches);
+  const branchName = getPunchBranchName(punch,row,sortedPunches);
+  return {
+    typeLabel,
+    issueLabel,
+    punchTime,
+    branchName,
+    label:issueLabel ? `${typeLabel} ${punchTime} - ${issueLabel}` : `${typeLabel} ${punchTime}`
+  };
+}
+
 function buildFingerprintTable(rows, columns, firstHeader='اسم الموظف'){
   if(!columns.length) return '<div class="empty">لا توجد بصمات في الفترة المحددة</div>';
   const head = columns.map(time=>`<th>${formatTimeValue(time)}</th>`).join('');
-  const body = rows.map(row=>{
+  const body = rows.map((row,index)=>{
     const color = row.color || colorForKey(row.key);
     const sortedPunches = [...row.punches].sort((a,b)=>punchTimeToMinutes(a)-punchTimeToMinutes(b));
     const hitsByTime = new Map();
@@ -510,19 +558,15 @@ function buildFingerprintTable(rows, columns, firstHeader='اسم الموظف')
       const isBridge = ranges.some(([start,end])=>idx >= start && idx <= end);
       const style = `--bridge-color:${hexToRgba(color,.16)};--hit-color:${color}`;
       const content = hits.map(punch=>{
-        const issueLabel = getPunchIssueLabel(punch,row,sortedPunches);
-        const punchTime = formatTimeValue(getPunchTime(punch));
-        const typeLabel = getPunchTypeLabel(punch,sortedPunches);
-        const branchName = getPunchBranchName(punch,row,sortedPunches);
-        const label = issueLabel ? `${typeLabel} ${punchTime} - ${issueLabel}` : `${typeLabel} ${punchTime}`;
+        const display = getPunchDisplayParts(punch,row,sortedPunches);
         const encodedId = encodeURIComponent(punch.id || '');
-        return `<span class="fingerprint-hit ${issueLabel?'issue':''}" style="${style}" role="button" tabindex="0" onclick="showPunchEditMenu(event,'${encodedId}')"><span>${label}</span>${branchName?`<span class="fingerprint-hit-branch">${escapeHtml(branchName)}</span>`:''}</span>`;
+        return `<span class="fingerprint-hit ${display.issueLabel?'issue':''}" style="${style}" role="button" tabindex="0" onclick="showPunchEditMenu(event,'${encodedId}')"><span>${escapeHtml(display.label)}</span>${display.branchName?`<span class="fingerprint-hit-branch">${escapeHtml(display.branchName)}</span>`:''}</span>`;
       }).join(' ');
       return `<td class="fingerprint-cell ${isBridge?'bridge':''}" style="${style}">${content}</td>`;
     }).join('');
-    return `<tr><td>${escapeHtml(row.label)}</td>${cells}</tr>`;
+    return `<tr><td class="row-number">${index + 1}</td><td class="employee-name-cell">${escapeHtml(row.label)}</td>${cells}</tr>`;
   }).join('');
-  return `<div class="grid-wrap"><table class="fingerprint-table"><thead><tr><th>${escapeHtml(firstHeader)}</th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  return `<div class="grid-wrap"><table class="fingerprint-table"><thead><tr><th class="row-number">م</th><th class="employee-name-cell">${escapeHtml(firstHeader)}</th>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function ensureControls(){
@@ -552,14 +596,7 @@ function updateStats(){
   document.getElementById('lastPunch').textContent = todayPunches.at(-1) ? formatTimeValue(getPunchTime(todayPunches.at(-1))) : '-';
 }
 
-function renderReport(){
-  const view = document.getElementById('reportView');
-  const subtitle = document.getElementById('reportSubtitle');
-  ensureControls();
-  if(!state.hrLoaded || !state.punchesLoaded){
-    view.innerHTML = '<div class="empty">جاري تحميل بيانات البصمة...</div>';
-    return;
-  }
+function syncReportControlsVisibility(){
   const mode = document.getElementById('reportMode').value;
   const dayInput = document.getElementById('dayDate');
   const employeeSelect = document.getElementById('employeeSelect');
@@ -570,22 +607,33 @@ function renderReport(){
   employeeSelect.style.display = isEmployeeMode ? '' : 'none';
   fromInput.style.display = isEmployeeMode ? '' : 'none';
   toInput.style.display = isEmployeeMode ? '' : 'none';
+}
 
+function getCurrentReportData(){
+  ensureControls();
+  const mode = document.getElementById('reportMode').value;
+  syncReportControlsVisibility(mode);
   const employees = getEmployeesForReport();
   if(!employees.length){
-    subtitle.textContent = 'لا توجد بيانات موظفين منشورة بعد. اعتمد جدول توزيع من النظام أولاً.';
-    view.innerHTML = '<div class="empty">لا توجد بيانات موظفين في Firebase</div>';
-    return;
+    return {
+      empty:true,
+      subtitle:'لا توجد بيانات موظفين منشورة بعد. اعتمد جدول توزيع من النظام أولاً.',
+      emptyMessage:'لا توجد بيانات موظفين في Firebase',
+      firstHeader:'اسم الموظف',
+      rows:[],
+      columns:[]
+    };
   }
 
-  if(isEmployeeMode){
+  if(mode === 'employee'){
+    const employeeSelect = document.getElementById('employeeSelect');
+    const fromInput = document.getElementById('fromDate');
+    const toInput = document.getElementById('toDate');
     const empId = employeeSelect.value || employees[0]?.id || '';
     const emp = employees.find(item=>item.id === empId);
     const fromValue = fromInput.value || formatDateInput(new Date());
     const toValue = toInput.value || fromValue;
     const dates = getDateRangeValues(fromValue,toValue);
-    const allPunches = dates.flatMap(date=>getPunchesForDate(date,empId));
-    const columns = getTimeColumns(allPunches);
     const rows = dates.map(dateValue=>{
       const date = parseDateInput(dateValue);
       return {
@@ -597,15 +645,20 @@ function renderReport(){
         punches:getPunchesForDate(dateValue,empId)
       };
     });
-    subtitle.textContent = emp ? `${emp.name} من ${parseDateInput(fromValue).toLocaleDateString('ar-KW')} إلى ${parseDateInput(toValue).toLocaleDateString('ar-KW')}` : '';
-    view.innerHTML = buildFingerprintTable(rows,columns,'اليوم') + buildFingerprintSummary(sumAttendanceTotals(rows));
-    return;
+    return {
+      mode,
+      firstHeader:'اليوم',
+      title:'تقرير البصمة',
+      subtitle:emp ? `${emp.name} من ${parseDateInput(fromValue).toLocaleDateString('ar-KW')} إلى ${parseDateInput(toValue).toLocaleDateString('ar-KW')}` : '',
+      rows,
+      columns:getTimeColumns(rows.flatMap(row=>row.punches || [])),
+      summary:sumAttendanceTotals(rows)
+    };
   }
 
+  const dayInput = document.getElementById('dayDate');
   const dateValue = dayInput.value || formatDateInput(new Date());
   const reportDate = parseDateInput(dateValue);
-  const punches = getPunchesForDate(dateValue);
-  const columns = getTimeColumns(punches);
   const rows = employees.map(emp=>({
     key:emp.id,
     label:emp.name,
@@ -614,8 +667,33 @@ function renderReport(){
     color:colorForKey(emp.id),
     punches:getPunchesForDate(dateValue,emp.id)
   }));
-  subtitle.textContent = `${getArabicDayName(reportDate)} ${reportDate.toLocaleDateString('ar-KW')}`;
-  view.innerHTML = buildFingerprintTable(rows,columns,'اسم الموظف');
+  return {
+    mode,
+    firstHeader:'اسم الموظف',
+    title:'تقرير البصمة',
+    subtitle:`${getArabicDayName(reportDate)} ${reportDate.toLocaleDateString('ar-KW')}`,
+    rows,
+    columns:getTimeColumns(rows.flatMap(row=>row.punches || [])),
+    summary:null
+  };
+}
+
+function renderReport(){
+  const view = document.getElementById('reportView');
+  const subtitle = document.getElementById('reportSubtitle');
+  ensureControls();
+  if(!state.hrLoaded || !state.punchesLoaded){
+    view.innerHTML = '<div class="empty">جاري تحميل بيانات البصمة...</div>';
+    return;
+  }
+  const reportData = getCurrentReportData();
+  subtitle.textContent = reportData.subtitle || '';
+  if(reportData.empty){
+    view.innerHTML = `<div class="empty">${escapeHtml(reportData.emptyMessage || 'لا توجد بيانات')}</div>`;
+    return;
+  }
+  view.innerHTML = buildFingerprintTable(reportData.rows,reportData.columns,reportData.firstHeader)
+    + (reportData.summary ? buildFingerprintSummary(reportData.summary) : '');
 }
 
 function openAddPunchModal(){
@@ -678,6 +756,7 @@ async function addManualPunch(){
   const payload = {
     empId:emp.id,
     empName:emp.name,
+    photoData:getEmployeePhoto(emp),
     type:typeValue,
     date:dateValue,
     time:timeValue,
@@ -743,42 +822,90 @@ function getReportFileBaseName(){
   return `تقرير البصمة - ${document.getElementById('dayDate').value || formatDateInput(new Date())}`;
 }
 
-function cloneReportWithInlineStyles(){
-  const source = document.getElementById('reportView');
-  const clone = source.cloneNode(true);
-  const sourceNodes = [source, ...source.querySelectorAll('*')];
-  const cloneNodes = [clone, ...clone.querySelectorAll('*')];
-  const props = ['display','flex-direction','align-items','justify-content','gap','background-color','color','font-family','font-size','font-weight','line-height','border','border-left','border-bottom','border-radius','box-shadow','padding','margin','width','min-width','height','min-height','text-align','white-space','position','right','top','z-index'];
-  sourceNodes.forEach((node,index)=>{
-    const target = cloneNodes[index];
-    if(!target || !(node instanceof HTMLElement) || !(target instanceof HTMLElement)) return;
-    const styles = window.getComputedStyle(node);
-    target.style.cssText += props.map(prop=>`${prop}:${styles.getPropertyValue(prop)}`).join(';');
-  });
-  return clone.outerHTML;
+function blendHexWithWhite(hex, alpha=.16){
+  const value = String(hex || '#2563eb').replace('#','');
+  const full = value.length === 3 ? value.split('').map(ch=>ch+ch).join('') : value.padEnd(6,'0').slice(0,6);
+  const int = parseInt(full,16);
+  const r = (int >> 16) & 255;
+  const g = (int >> 8) & 255;
+  const b = int & 255;
+  const mix = channel=>Math.round(255 - (255 - channel) * alpha).toString(16).padStart(2,'0');
+  return `#${mix(r)}${mix(g)}${mix(b)}`;
 }
 
-function buildExportHtml(){
-  const title = 'تقرير البصمة';
-  const subtitle = document.getElementById('reportSubtitle').textContent || '';
-  return `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><title>${escapeHtml(getReportFileBaseName())}</title>
+function getReportExportData(){
+  const data = getCurrentReportData();
+  if(data.empty || !data.rows.length || !data.columns.length) return null;
+  return data;
+}
+
+function buildExcelReportHtml(data){
+  const headers = data.columns.map(time=>`<th>${escapeHtml(formatTimeValue(time))}</th>`).join('');
+  const rows = data.rows.map((row,index)=>{
+    const color = row.color || colorForKey(row.key);
+    const sortedPunches = [...(row.punches || [])].sort((a,b)=>punchTimeToMinutes(a)-punchTimeToMinutes(b));
+    const hitsByTime = new Map();
+    sortedPunches.forEach(punch=>{
+      const time = getPunchTime(punch);
+      if(!hitsByTime.has(time)) hitsByTime.set(time,[]);
+      hitsByTime.get(time).push(punch);
+    });
+    const ranges = [];
+    for(let i=0;i<sortedPunches.length;i+=2){
+      const start = data.columns.indexOf(getPunchTime(sortedPunches[i]));
+      const endPunch = sortedPunches[i+1] || sortedPunches[i];
+      const end = data.columns.indexOf(getPunchTime(endPunch));
+      if(start >= 0 && end >= 0) ranges.push([Math.min(start,end),Math.max(start,end)]);
+    }
+    const cells = data.columns.map((time,idx)=>{
+      const hits = hitsByTime.get(time) || [];
+      const bridge = ranges.some(([start,end])=>idx >= start && idx <= end);
+      const bg = hits.length ? '#ffffff' : (bridge ? blendHexWithWhite(color,.18) : '#f8fafc');
+      const content = hits.map(punch=>{
+        const display = getPunchDisplayParts(punch,row,sortedPunches);
+        const fill = display.issueLabel ? '#ef4444' : color;
+        return `<div class="hit" style="background:${fill}">${escapeHtml(display.label)}${display.branchName?`<br><span>${escapeHtml(display.branchName)}</span>`:''}</div>`;
+      }).join('');
+      return `<td style="background:${bg}">${content}</td>`;
+    }).join('');
+    return `<tr><td class="num">${index + 1}</td><td class="name">${escapeHtml(row.label)}</td>${cells}</tr>`;
+  }).join('');
+  const summary = data.summary ? `<div class="summary">
+    <span>ساعات التأخير: ${escapeHtml(formatMinutesDuration(data.summary.late))}</span>
+    <span>ساعات الخروج المبكر: ${escapeHtml(formatMinutesDuration(data.summary.early))}</span>
+    <span>الإجمالي: ${escapeHtml(formatMinutesDuration(data.summary.total))}</span>
+  </div>` : '';
+  return `\ufeff<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><title>${escapeHtml(getReportFileBaseName())}</title>
     <style>
-      @page{size:A4 landscape;margin:12mm}
-      body{font-family:'Tajawal','Cairo',Arial,sans-serif;background:#f4f7fb;color:#111827;margin:0;padding:18px;direction:rtl}
-      .export-sheet{background:#fff;border:1px solid #dbe3ef;border-radius:14px;padding:18px}
-      h1{font-size:24px;margin:0 0 6px;color:#0f172a}
-      .export-subtitle{color:#64748b;margin-bottom:16px;font-weight:800}
-      table{width:100%;border-collapse:separate;border-spacing:0}
-      th,td{border:1px solid #dbe3ef;padding:8px;text-align:center}
-    </style></head><body><section class="export-sheet"><h1>${title}</h1><div class="export-subtitle">${escapeHtml(subtitle)}</div>${cloneReportWithInlineStyles()}</section></body></html>`;
+      @page{mso-page-orientation:landscape;margin:.25in}
+      body{font-family:Arial,Tahoma,sans-serif;direction:rtl;background:#fff;color:#111827}
+      .sheet{direction:rtl;width:100%}
+      .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+      .logo{background:#2563eb;color:#fff;font-weight:bold;border-radius:10px;padding:10px 14px;font-size:18px}
+      h1{font-size:20px;margin:0 0 4px;color:#0f172a}
+      .subtitle{font-size:12px;color:#64748b;font-weight:bold}
+      table{border-collapse:collapse;width:100%;table-layout:fixed}
+      th,td{border:1px solid #d9e2ef;text-align:center;vertical-align:middle;height:30px;font-size:10pt;padding:3px;color:#111827}
+      th{background:#e8eef7;font-weight:bold}
+      .num{width:34px;background:#f8fafc;font-weight:bold}
+      .name{width:175px;text-align:right;background:#f8fafc;font-weight:bold}
+      .hit{display:inline-block;color:#fff;font-weight:bold;border-radius:8px;padding:4px 7px;line-height:1.25;min-width:70px}
+      .hit span{font-size:8pt;font-weight:normal}
+      .summary{margin-top:10px;display:flex;gap:12px;font-weight:bold;color:#0f172a}
+      .summary span{border:1px solid #d9e2ef;background:#f8fafc;padding:8px 12px;border-radius:8px}
+    </style></head><body><div class="sheet">
+      <div class="head"><div><h1>${escapeHtml(data.title || 'تقرير البصمة')}</h1><div class="subtitle">${escapeHtml(data.subtitle || '')}</div></div><div class="logo">HRMS</div></div>
+      <table><thead><tr><th class="num">م</th><th class="name">${escapeHtml(data.firstHeader)}</th>${headers}</tr></thead><tbody>${rows}</tbody></table>${summary}
+    </div></body></html>`;
 }
 
 function downloadReportExcel(){
-  if(!document.querySelector('#reportView table')){
+  const data = getReportExportData();
+  if(!data){
     alert('لا يوجد جدول جاهز للتحميل.');
     return;
   }
-  const html = `\ufeff${buildExportHtml()}`;
+  const html = buildExcelReportHtml(data);
   const blob = new Blob([html], {type:'application/vnd.ms-excel;charset=utf-8'});
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -790,21 +917,234 @@ function downloadReportExcel(){
   URL.revokeObjectURL(url);
 }
 
-function downloadReportPdf(){
-  if(!document.querySelector('#reportView table')){
+function drawRoundRect(ctx,x,y,w,h,r,fill,stroke){
+  const radius = Math.min(r,w/2,h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+radius,y);
+  ctx.lineTo(x+w-radius,y);
+  ctx.quadraticCurveTo(x+w,y,x+w,y+radius);
+  ctx.lineTo(x+w,y+h-radius);
+  ctx.quadraticCurveTo(x+w,y+h,x+w-radius,y+h);
+  ctx.lineTo(x+radius,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-radius);
+  ctx.lineTo(x,y+radius);
+  ctx.quadraticCurveTo(x,y,x+radius,y);
+  ctx.closePath();
+  if(fill) ctx.fill();
+  if(stroke) ctx.stroke();
+}
+
+function setCanvasFont(ctx,size,weight=800,family='Tajawal'){
+  ctx.font = `${weight} ${size}px ${family}, Cairo, Arial, sans-serif`;
+}
+
+function drawText(ctx,text,x,y,maxWidth,{size=24,weight=800,color='#0f172a',align='right'}={}){
+  ctx.save();
+  ctx.direction = 'rtl';
+  ctx.textAlign = align;
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  setCanvasFont(ctx,size,weight);
+  ctx.fillText(String(text || ''),x,y,maxWidth);
+  ctx.restore();
+}
+
+function drawFingerprintReportCanvas(data){
+  const canvas = document.createElement('canvas');
+  canvas.width = 2200;
+  canvas.height = 1556;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#f4f7fb';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#d9e2ef';
+  ctx.lineWidth = 2;
+  drawRoundRect(ctx,80,72,2040,1412,30,true,true);
+
+  ctx.fillStyle = '#2563eb';
+  drawRoundRect(ctx,1920,108,92,92,24,true,false);
+  drawText(ctx,'HR',1966,155,70,{size:36,weight:900,color:'#fff',align:'center'});
+  drawText(ctx,data.title || 'تقرير البصمة',1870,132,560,{size:42,weight:900,color:'#0f172a'});
+  drawText(ctx,data.subtitle || '',1870,184,560,{size:24,weight:700,color:'#64748b'});
+  drawText(ctx,'نظام الموارد البشرية',270,145,360,{size:24,weight:800,color:'#64748b',align:'left'});
+
+  const punchCount = data.rows.reduce((sum,row)=>sum + (row.punches?.length || 0),0);
+  drawText(ctx,`الموظفون: ${data.rows.length}`,580,150,250,{size:24,weight:800,color:'#0f172a',align:'center'});
+  drawText(ctx,`البصمات: ${punchCount}`,820,150,250,{size:24,weight:800,color:'#0f172a',align:'center'});
+
+  const tableX = 120;
+  const tableY = 250;
+  const tableW = 1960;
+  const tableH = data.summary ? 1040 : 1160;
+  const headerH = 58;
+  const rowH = (tableH - headerH) / Math.max(data.rows.length,1);
+  const numberW = 58;
+  const nameW = data.mode === 'employee' ? 260 : 335;
+  const right = tableX + tableW;
+  const numberX = right - numberW;
+  const nameX = numberX - nameW;
+  const timeAreaW = nameX - tableX;
+  const colW = data.columns.length ? timeAreaW / data.columns.length : timeAreaW;
+  const rowFont = Math.max(13,Math.min(21,rowH * .38));
+  const hitFont = Math.max(10,Math.min(16,rowH * .28, colW * .11));
+
+  ctx.fillStyle = '#e8eef7';
+  ctx.strokeStyle = '#d9e2ef';
+  ctx.lineWidth = 1.5;
+  drawRoundRect(ctx,tableX,tableY,tableW,headerH,18,true,true);
+  drawText(ctx,'م',numberX + numberW/2,tableY + headerH/2,numberW-8,{size:20,weight:900,align:'center'});
+  drawText(ctx,data.firstHeader || 'اسم الموظف',nameX + nameW - 18,tableY + headerH/2,nameW-28,{size:20,weight:900});
+  data.columns.forEach((time,idx)=>{
+    const x = nameX - (idx + 1) * colW;
+    drawText(ctx,formatTimeValue(time),x + colW/2,tableY + headerH/2,colW-8,{size:18,weight:900,align:'center'});
+    ctx.strokeStyle = '#d9e2ef';
+    ctx.beginPath();
+    ctx.moveTo(x,tableY);
+    ctx.lineTo(x,tableY + tableH);
+    ctx.stroke();
+  });
+
+  data.rows.forEach((row,index)=>{
+    const y = tableY + headerH + index * rowH;
+    ctx.fillStyle = index % 2 ? '#ffffff' : '#f8fafc';
+    ctx.fillRect(tableX,y,tableW,rowH);
+    const color = row.color || colorForKey(row.key);
+    const sortedPunches = [...(row.punches || [])].sort((a,b)=>punchTimeToMinutes(a)-punchTimeToMinutes(b));
+    const ranges = [];
+    for(let i=0;i<sortedPunches.length;i+=2){
+      const start = data.columns.indexOf(getPunchTime(sortedPunches[i]));
+      const endPunch = sortedPunches[i+1] || sortedPunches[i];
+      const end = data.columns.indexOf(getPunchTime(endPunch));
+      if(start >= 0 && end >= 0) ranges.push([Math.min(start,end),Math.max(start,end)]);
+    }
+    ranges.forEach(([start,end])=>{
+      const leftX = nameX - (end + 1) * colW;
+      const bridgeW = (end - start + 1) * colW;
+      ctx.fillStyle = hexToRgba(color,.15);
+      ctx.fillRect(leftX,y,bridgeW,rowH);
+    });
+    drawText(ctx,String(index + 1),numberX + numberW/2,y + rowH/2,numberW-8,{size:rowFont,weight:900,color:'#64748b',align:'center'});
+    drawText(ctx,row.label,nameX + nameW - 18,y + rowH/2,nameW-28,{size:rowFont,weight:900,color:'#0f172a'});
+
+    const hitsByTime = new Map();
+    sortedPunches.forEach(punch=>{
+      const time = getPunchTime(punch);
+      if(!hitsByTime.has(time)) hitsByTime.set(time,[]);
+      hitsByTime.get(time).push(punch);
+    });
+    data.columns.forEach((time,idx)=>{
+      const hits = hitsByTime.get(time) || [];
+      hits.forEach((punch,hitIndex)=>{
+        const display = getPunchDisplayParts(punch,row,sortedPunches);
+        const cellX = nameX - (idx + 1) * colW;
+        const pillW = Math.min(colW - 10, Math.max(78, colW * .86));
+        const pillH = Math.min(rowH - 8, display.branchName ? 38 : 30);
+        const pillX = cellX + (colW - pillW) / 2;
+        const pillY = y + (rowH - pillH) / 2 + (hitIndex * Math.min(4,pillH/8));
+        ctx.fillStyle = display.issueLabel ? '#ef4444' : color;
+        drawRoundRect(ctx,pillX,pillY,pillW,pillH,12,true,false);
+        drawText(ctx,display.label,pillX + pillW/2,pillY + (display.branchName ? pillH*.36 : pillH/2),pillW-10,{size:hitFont,weight:900,color:'#fff',align:'center'});
+        if(display.branchName){
+          drawText(ctx,display.branchName,pillX + pillW/2,pillY + pillH*.72,pillW-10,{size:Math.max(9,hitFont-3),weight:700,color:'rgba(255,255,255,.9)',align:'center'});
+        }
+      });
+    });
+    ctx.strokeStyle = '#d9e2ef';
+    ctx.beginPath();
+    ctx.moveTo(tableX,y);
+    ctx.lineTo(tableX + tableW,y);
+    ctx.stroke();
+  });
+  ctx.strokeStyle = '#d9e2ef';
+  ctx.strokeRect(tableX,tableY,tableW,tableH);
+  ctx.beginPath();
+  ctx.moveTo(numberX,tableY);
+  ctx.lineTo(numberX,tableY + tableH);
+  ctx.moveTo(nameX,tableY);
+  ctx.lineTo(nameX,tableY + tableH);
+  ctx.stroke();
+
+  if(data.summary){
+    const summaryY = tableY + tableH + 34;
+    const cards = [
+      ['ساعات التأخير',formatMinutesDuration(data.summary.late),'#ef4444'],
+      ['ساعات الخروج المبكر',formatMinutesDuration(data.summary.early),'#ef4444'],
+      ['الإجمالي',formatMinutesDuration(data.summary.total),'#0f172a']
+    ];
+    cards.forEach((card,idx)=>{
+      const x = right - (idx + 1) * 420;
+      ctx.fillStyle = '#f8fafc';
+      ctx.strokeStyle = '#d9e2ef';
+      drawRoundRect(ctx,x,summaryY,390,118,18,true,true);
+      drawText(ctx,card[0],x+350,summaryY+36,310,{size:22,weight:900,color:'#64748b'});
+      drawText(ctx,card[1],x+350,summaryY+80,310,{size:28,weight:900,color:card[2]});
+    });
+  }
+  return canvas;
+}
+
+function dataUrlToBytes(dataUrl){
+  const base64 = String(dataUrl).split(',')[1] || '';
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function buildPdfFromJpeg(jpegBytes,width,height){
+  const encoder = new TextEncoder();
+  const parts = [];
+  const offsets = [0];
+  let offset = 0;
+  const append = part=>{
+    const bytes = typeof part === 'string' ? encoder.encode(part) : part;
+    parts.push(bytes);
+    offset += bytes.byteLength;
+  };
+  const obj = (id,body)=>{
+    offsets[id] = offset;
+    append(`${id} 0 obj\n${body}\nendobj\n`);
+  };
+  append('%PDF-1.4\n');
+  obj(1,'<< /Type /Catalog /Pages 2 0 R >>');
+  obj(2,'<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
+  obj(3,'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>');
+  offsets[4] = offset;
+  append(`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpegBytes.byteLength} >>\nstream\n`);
+  append(jpegBytes);
+  append('\nendstream\nendobj\n');
+  const content = 'q\n842 0 0 595 0 0 cm\n/Im0 Do\nQ';
+  obj(5,`<< /Length ${encoder.encode(content).byteLength} >>\nstream\n${content}\nendstream`);
+  const xrefOffset = offset;
+  append('xref\n0 6\n0000000000 65535 f \n');
+  for(let i=1;i<=5;i++) append(`${String(offsets[i]).padStart(10,'0')} 00000 n \n`);
+  append(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
+  return new Blob(parts,{type:'application/pdf'});
+}
+
+function downloadBlob(blob,filename){
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadReportPdf(){
+  const data = getReportExportData();
+  if(!data){
     alert('لا يوجد جدول جاهز للتحميل.');
     return;
   }
-  const win = window.open('', '_blank');
-  if(!win){
-    alert('المتصفح منع فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة ثم حاول مرة أخرى.');
-    return;
-  }
-  win.document.open();
-  win.document.write(buildExportHtml());
-  win.document.close();
-  win.focus();
-  setTimeout(()=>win.print(), 350);
+  if(document.fonts?.ready) await document.fonts.ready.catch(()=>{});
+  const canvas = drawFingerprintReportCanvas(data);
+  const jpegBytes = dataUrlToBytes(canvas.toDataURL('image/jpeg',.94));
+  const pdfBlob = buildPdfFromJpeg(jpegBytes,canvas.width,canvas.height);
+  downloadBlob(pdfBlob,`${getReportFileBaseName()}.pdf`);
 }
 
 function startFirebaseListeners(){

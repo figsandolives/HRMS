@@ -215,7 +215,7 @@
             <div class="form-row">
               <div class="form-group">
                 <label class="form-label">عدد ساعات العمل اليومي *</label>
-                <input class="form-control" id="empHours" placeholder="مثال: 8" type="text" oninput="toEnglishDigits(this);updateHoursBar()">
+                <input class="form-control" id="empHours" placeholder="مثال: 12.5" type="text" inputmode="decimal" oninput="toEnglishDecimal(this);updateHoursBar()">
               </div>
             </div>
 
@@ -398,7 +398,6 @@
               </div>
               <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end">
                 <button class="btn btn-primary" onclick="navTo('fingerprintCodes')">تحديد رموز الدخول للبصمة</button>
-                <button class="btn btn-secondary" onclick="openFingerprintApp()">فتح تطبيق البصمة</button>
               </div>
             </div>
             <div class="setting-row" style="margin-bottom:0">
