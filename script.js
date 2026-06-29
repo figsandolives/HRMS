@@ -309,17 +309,42 @@ function getFirebaseEmployersPayload(){
   return payload;
 }
 
-function getFirebaseFingerprintPlacesPayload(){
-  const source = fingerprintPlacesCache && Object.keys(fingerprintPlacesCache).length
-    ? fingerprintPlacesCache
-    : (appData.fingerprintPlaces || {});
-  if(Array.isArray(source)){
-    return source.reduce((payload, place)=>{
-      if(place?.id) payload[place.id] = cloneForFirebase(place);
+function normalizeFingerprintPlacesMap(value){
+  if(Array.isArray(value)){
+    return value.reduce((payload, place)=>{
+      if(place?.id) payload[place.id] = place;
       return payload;
     },{});
   }
-  return cloneForFirebase(source || {});
+  return value && typeof value === 'object' ? value : {};
+}
+
+function getFingerprintPlacesMap(){
+  return {
+    ...normalizeFingerprintPlacesMap(appData.fingerprintPlaces),
+    ...normalizeFingerprintPlacesMap(fingerprintPlacesCache)
+  };
+}
+
+function rememberFingerprintPlace(place){
+  if(!place?.id) return;
+  appData.fingerprintPlaces = normalizeFingerprintPlacesMap(appData.fingerprintPlaces);
+  fingerprintPlacesCache = normalizeFingerprintPlacesMap(fingerprintPlacesCache);
+  const savedPlace = cloneForFirebase(place);
+  appData.fingerprintPlaces[place.id] = savedPlace;
+  fingerprintPlacesCache[place.id] = savedPlace;
+}
+
+function forgetFingerprintPlace(id){
+  if(!id) return;
+  appData.fingerprintPlaces = normalizeFingerprintPlacesMap(appData.fingerprintPlaces);
+  fingerprintPlacesCache = normalizeFingerprintPlacesMap(fingerprintPlacesCache);
+  delete appData.fingerprintPlaces[id];
+  delete fingerprintPlacesCache[id];
+}
+
+function getFirebaseFingerprintPlacesPayload(){
+  return cloneForFirebase(getFingerprintPlacesMap());
 }
 
 function loadExternalScript(src){
@@ -428,7 +453,11 @@ async function setupFingerprintPlacesPage(options={}){
   fingerprintPlaceSessionUnsubscribe = null;
   if(typeof window.hrmsFirebase.watchFingerprintPlaces !== 'function') throw new Error('ملف Firebase قديم. ارفع firebase-publisher.js ثم حدث الصفحة.');
   fingerprintPlacesUnsubscribe = await window.hrmsFirebase.watchFingerprintPlaces(data=>{
-    fingerprintPlacesCache = data || {};
+    fingerprintPlacesCache = normalizeFingerprintPlacesMap(data);
+    if(Object.keys(fingerprintPlacesCache).length){
+      appData.fingerprintPlaces = getFingerprintPlacesMap();
+      saveData();
+    }
     renderFingerprintPlacesList();
   });
 }
@@ -688,7 +717,7 @@ function cancelFingerprintBarcodeEdit(){
 }
 
 function editFingerprintBarcodePlace(id){
-  const place = fingerprintPlacesCache?.[id];
+  const place = getFingerprintPlacesMap()?.[id];
   if(!place){
     showToast('تعذر العثور على الباركود','error');
     return;
@@ -699,20 +728,38 @@ function editFingerprintBarcodePlace(id){
 
 async function saveFingerprintBarcodePlaceFromForm(){
   const wasEditing = Boolean(editingFingerprintBarcodeId);
-  const existingPlace = wasEditing ? fingerprintPlacesCache?.[editingFingerprintBarcodeId] : null;
+  const existingPlace = wasEditing ? getFingerprintPlacesMap()?.[editingFingerprintBarcodeId] : null;
   const payload = getFingerprintBarcodeFormData(existingPlace);
   if(!payload) return;
   const titleInput = document.getElementById('fingerprintBarcodeTitle');
   showLoading(wasEditing ? 'جاري حفظ التعديل...' : 'جاري إنشاء الباركود...');
   try{
     await loadFirebasePublisher();
-    await window.hrmsFirebase.saveFingerprintPlace(payload);
+    const savedId = await window.hrmsFirebase.saveFingerprintPlace(payload);
+    const savedPlace = {
+      ...payload,
+      id:savedId || payload.id || `barcode-${payload.barcodeToken}`,
+      updatedAt:new Date().toISOString()
+    };
+    rememberFingerprintPlace(savedPlace);
+    saveData();
+    renderFingerprintPlacesList();
     if(titleInput) titleInput.value = '';
     setFingerprintBarcodeFormMode(null);
     showToast(wasEditing ? 'تم حفظ تعديل الباركود' : 'تم إنشاء باركود مكان البصمة');
   } catch(err){
     console.error(err);
-    showToast(wasEditing ? 'تعذر حفظ تعديل الباركود' : 'تعذر إنشاء الباركود','error');
+    const localPlace = {
+      ...payload,
+      id:payload.id || `barcode-${payload.barcodeToken}`,
+      updatedAt:new Date().toISOString()
+    };
+    rememberFingerprintPlace(localPlace);
+    saveData();
+    renderFingerprintPlacesList();
+    if(titleInput) titleInput.value = '';
+    setFingerprintBarcodeFormMode(null);
+    showToast('تم حفظ الباركود محلياً، لكن تعذر نشره إلى Firebase','error');
   } finally {
     hideLoading();
   }
@@ -744,13 +791,13 @@ async function renderFingerprintBarcodeCanvas(canvasId, value, size=156){
 }
 
 function renderFingerprintBarcodeCanvases(){
-  Object.values(fingerprintPlacesCache || {}).forEach(place=>{
+  Object.values(getFingerprintPlacesMap()).forEach(place=>{
     if(place?.barcodeValue) renderFingerprintBarcodeCanvas(`barcodeCanvas-${place.id}`, place.barcodeValue);
   });
 }
 
 function downloadFingerprintBarcode(id){
-  const place = fingerprintPlacesCache?.[id];
+  const place = getFingerprintPlacesMap()?.[id];
   const canvas = document.getElementById(`barcodeCanvas-${id}`);
   if(!place || !canvas) return;
   const link = document.createElement('a');
@@ -876,7 +923,7 @@ function formatFingerprintDeviceDetails(data){
 function renderFingerprintPlacesList(){
   const list = document.getElementById('fingerprintPlacesList');
   if(!list) return;
-  const places = Object.values(fingerprintPlacesCache || {}).filter(place=>place?.mode === 'barcode' || place?.barcodeToken || place?.barcodeValue);
+  const places = Object.values(getFingerprintPlacesMap()).filter(place=>place?.mode === 'barcode' || place?.barcodeToken || place?.barcodeValue);
   if(!places.length){
     list.innerHTML = '<div class="empty-state"><p>لا توجد باركودات بصمة محفوظة بعد</p></div>';
     return;
@@ -933,7 +980,7 @@ async function saveFingerprintPlace(){
   try{
     await loadFirebasePublisher();
     const location = pendingFingerprintPlaceDevice.location || {};
-    await window.hrmsFirebase.saveFingerprintPlace({
+    const savedPayload = {
       location:{
         lat:Number(location.lat),
         lng:Number(location.lng),
@@ -950,7 +997,13 @@ async function saveFingerprintPlace(){
       employerIds:employers.map(employer=>employer.id),
       employerNames:employers.map(employer=>employer.name),
       createdAt:new Date().toISOString()
-    }, pendingFingerprintPlaceDevice.sessionId || getFingerprintPlaceSessionId());
+    };
+    const savedId = await window.hrmsFirebase.saveFingerprintPlace(savedPayload, pendingFingerprintPlaceDevice.sessionId || getFingerprintPlaceSessionId());
+    rememberFingerprintPlace({
+      ...savedPayload,
+      id:savedId || pendingFingerprintPlaceDevice.sessionId || getFingerprintPlaceSessionId()
+    });
+    saveData();
     pendingFingerprintPlaceDevice = null;
     resetFingerprintPlaceSessionId();
     document.getElementById('fingerprintPlaceRadius').value = '20';
@@ -970,11 +1023,18 @@ async function deleteFingerprintPlace(id){
   try{
     await loadFirebasePublisher();
     await window.hrmsFirebase.deleteFingerprintPlace(id);
+    forgetFingerprintPlace(id);
+    saveData();
+    renderFingerprintPlacesList();
     if(editingFingerprintBarcodeId === id) cancelFingerprintBarcodeEdit();
     showToast('تم حذف مكان البصمة');
   } catch(err){
     console.error(err);
-    showToast('تعذر حذف مكان البصمة','error');
+    forgetFingerprintPlace(id);
+    saveData();
+    renderFingerprintPlacesList();
+    if(editingFingerprintBarcodeId === id) cancelFingerprintBarcodeEdit();
+    showToast('تم حذف مكان البصمة محلياً، لكن تعذر حذفه من Firebase','error');
   } finally {
     hideLoading();
   }
